@@ -86,8 +86,8 @@ Data loading strategy (both, per spec)
 
 Interaction model
 -----------------
-  - Mouse-move pan (middle third of viewport): passive rotation
-  - Click-drag: high-gain rotation, drag-distance maps to angle
+  - Click-drag: grab-and-pull rotation, drag-distance maps to angle
+    (no passive mouse-follow -- the room only turns while you drag)
   - Hover door: glow + scale-up, cursor -> pointer
   - Click door: 600ms walk-through (approach 300 / flash 50 / arrival 250)
   - Inside a room: same pan controls + "back to lobby" door behind user
@@ -180,7 +180,7 @@ Out of scope for v1 (deferred)
       <span id="title">The Workshop</span>
       <span id="subtitle">Lobby</span>
     </div>
-    <div id="hint">Move the mouse to look around &middot; click-drag for fine control &middot; click a door to enter</div>
+    <div id="hint">Click and drag to look around &middot; click a door to enter</div>
     <div id="back-hint" class="hidden">Click the back door or press <kbd>Esc</kbd> to return to the lobby</div>
   </div>
   <div id="loading">Building the workshop&hellip;</div>
@@ -1292,7 +1292,6 @@ Out of scope for v1 (deferred)
         this.targetPitch = 0;
         this.dragging = false;
         this.dragStart = { x: 0, y: 0, yaw: 0, pitch: 0 };
-        this.lastMouse = { x: 0.5, y: 0.5 };
         this.maxPitch = THREE.MathUtils.degToRad(35);
         this.enabled = true;
         this._bind();
@@ -1300,17 +1299,16 @@ Out of scope for v1 (deferred)
       _bind() {
         const d = this.dom;
         d.addEventListener('mousemove', this._onMove = (e) => {
+          if (!this.dragging) return;
           const rect = d.getBoundingClientRect();
-          this.lastMouse.x = (e.clientX - rect.left) / rect.width;
-          this.lastMouse.y = (e.clientY - rect.top)  / rect.height;
-          if (this.dragging) {
-            const dx = (e.clientX - this.dragStart.x) / rect.width;
-            const dy = (e.clientY - this.dragStart.y) / rect.height;
-            // drag-gain: a full-viewport drag rotates ~120deg yaw / ~60deg pitch
-            this.targetYaw   = this.dragStart.yaw   - dx * THREE.MathUtils.degToRad(180);
-            this.targetPitch = this.dragStart.pitch - dy * THREE.MathUtils.degToRad(80);
-            this.targetPitch = THREE.MathUtils.clamp(this.targetPitch, -this.maxPitch, this.maxPitch);
-          }
+          const dx = (e.clientX - this.dragStart.x) / rect.width;
+          const dy = (e.clientY - this.dragStart.y) / rect.height;
+          // grab-and-pull: drag right rotates the world right (camera
+          // turns left). A full-viewport drag rotates ~180 deg yaw /
+          // ~80 deg pitch.
+          this.targetYaw   = this.dragStart.yaw   - dx * THREE.MathUtils.degToRad(180);
+          this.targetPitch = this.dragStart.pitch - dy * THREE.MathUtils.degToRad(80);
+          this.targetPitch = THREE.MathUtils.clamp(this.targetPitch, -this.maxPitch, this.maxPitch);
         });
         d.addEventListener('mousedown', this._onDown = (e) => {
           if (e.button !== 0) return;
@@ -1327,25 +1325,9 @@ Out of scope for v1 (deferred)
       }
       update(dt) {
         if (!this.enabled) return;
-        if (!this.dragging) {
-          // passive mouse-move pan: rotate toward mouse x, only when
-          // mouse is in the middle vertical third of the screen.
-          if (this.lastMouse.y > 0.33 && this.lastMouse.y < 0.67) {
-            // map x from [0,1] to [-1,1], then to small angular velocity
-            const xCenter = this.lastMouse.x - 0.5;
-            const yawSpeed = xCenter * THREE.MathUtils.degToRad(60); // deg/s at edge
-            this.targetYaw -= yawSpeed * dt;
-          }
-          // slight pitch toward y — encourages looking up/down softly
-          if (this.lastMouse.y < 0.33) {
-            this.targetPitch = THREE.MathUtils.lerp(this.targetPitch, this.maxPitch * 0.4, 1 - Math.exp(-dt * 2));
-          } else if (this.lastMouse.y > 0.67) {
-            this.targetPitch = THREE.MathUtils.lerp(this.targetPitch, -this.maxPitch * 0.4, 1 - Math.exp(-dt * 2));
-          } else {
-            this.targetPitch = THREE.MathUtils.lerp(this.targetPitch, 0, 1 - Math.exp(-dt * 1.5));
-          }
-        }
-        // smooth follow toward targets
+        // No passive mouse-follow — rotation is driven only by
+        // click-and-drag. Smoothly chase the target so released
+        // drags don't snap.
         const k = 1 - Math.exp(-dt * 8);
         this.yaw   = THREE.MathUtils.lerp(this.yaw,   this.targetYaw,   k);
         this.pitch = THREE.MathUtils.lerp(this.pitch, this.targetPitch, k);
