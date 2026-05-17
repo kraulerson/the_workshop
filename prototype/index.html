@@ -2712,8 +2712,12 @@ Out of scope for v1 (deferred)
         transparent: true, opacity: 0.7
       });
 
+      // Park the mill against the LEFT wall and rotate it 90 deg so
+      // it faces into the room. Centering it would block the camera's
+      // view of the rest of the cell as soon as the user walks in.
       const millGroup = new THREE.Group();
-      millGroup.position.set(0, 0, 0.5);
+      millGroup.position.set(-W/2 + 0.9, 0, 0.2);
+      millGroup.rotation.y = Math.PI / 2;
       // base
       const millBase = new THREE.Mesh(new THREE.BoxGeometry(2.4, 0.5, 1.6), machineDark);
       millBase.position.set(0, 0.25, 0);
@@ -2748,30 +2752,30 @@ Out of scope for v1 (deferred)
       millGroup.add(labelStrip);
       scene.add(millGroup);
 
-      // ------- control pendant on swing arm -------
+      // ------- control pendant on swing arm (rotated to match mill on left wall) -------
       const armMat = new THREE.MeshStandardMaterial({ color: 0x202428, roughness: 0.6, metalness: 0.7 });
       const arm1 = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.06, 0.9), armMat);
-      arm1.position.set(1.2, 2.0, 0.65);
-      arm1.rotation.y = -Math.PI / 4;
+      arm1.position.set(-W/2 + 0.9, 2.0, -1.3);
+      arm1.rotation.y = Math.PI / 4;
       scene.add(arm1);
       const pendant = new THREE.Mesh(new THREE.BoxGeometry(0.35, 0.55, 0.1), armMat);
-      pendant.position.set(1.7, 1.7, 1.05);
-      pendant.rotation.y = -Math.PI / 6;
+      pendant.position.set(-W/2 + 1.4, 1.7, -1.8);
+      pendant.rotation.y = Math.PI / 3;
       scene.add(pendant);
       const pendantScreen = new THREE.Mesh(
         new THREE.PlaneGeometry(0.28, 0.2),
         new THREE.MeshBasicMaterial({ color: 0x4ae098 })
       );
-      pendantScreen.position.set(1.74, 1.78, 1.10);
-      pendantScreen.rotation.y = -Math.PI / 6;
+      pendantScreen.position.set(-W/2 + 1.46, 1.78, -1.83);
+      pendantScreen.rotation.y = Math.PI / 3;
       scene.add(pendantScreen);
 
-      // chip pan with swarf (curled metal shavings)
+      // chip pan with swarf (just in front of the mill, against the left wall)
       const chipPan = new THREE.Mesh(
-        new THREE.BoxGeometry(1.4, 0.06, 0.8),
+        new THREE.BoxGeometry(0.8, 0.06, 1.4),
         new THREE.MeshStandardMaterial({ color: 0x16181c, roughness: 0.7, metalness: 0.6 })
       );
-      chipPan.position.set(0, 0.05, 1.6);
+      chipPan.position.set(-W/2 + 2.0, 0.05, 0.2);
       scene.add(chipPan);
       const swarfMat = new THREE.MeshStandardMaterial({ color: 0x9ca0a8, roughness: 0.45, metalness: 0.85 });
       for (let i = 0; i < 14; i++) {
@@ -2779,7 +2783,7 @@ Out of scope for v1 (deferred)
           new THREE.TorusGeometry(0.04 + Math.random() * 0.04, 0.012, 6, 14, Math.PI),
           swarfMat
         );
-        sw.position.set(-0.5 + Math.random(), 0.1, 1.3 + Math.random() * 0.6);
+        sw.position.set(-W/2 + 2.0 + (Math.random() - 0.5) * 0.6, 0.1, -0.5 + Math.random());
         sw.rotation.set(Math.random() * Math.PI, Math.random() * Math.PI, Math.random() * Math.PI);
         scene.add(sw);
       }
@@ -2790,7 +2794,7 @@ Out of scope for v1 (deferred)
         new THREE.MeshStandardMaterial({ color: 0x2a5048, roughness: 0.1, metalness: 0.6, emissive: 0x0a2a20, emissiveIntensity: 0.3 })
       );
       coolant.rotation.x = -Math.PI / 2;
-      coolant.position.set(-1.6, 0.005, 1.4);
+      coolant.position.set(-W/2 + 2.4, 0.005, 1.5);
       scene.add(coolant);
 
       // tool cart against the right wall — drawers
@@ -2818,12 +2822,14 @@ Out of scope for v1 (deferred)
       endmill.rotation.z = Math.PI / 2;
       scene.add(endmill);
 
-      // steel-sheet whiteboard mounted on the front wall (left of the mill)
+      // steel-sheet whiteboard mounted on the front wall, biased
+      // right-of-center so it's clear of the mill (which now lives
+      // along the left wall)
       const wb = makePlaceholderWhiteboard({
         width: 2.6, height: 1.7,
         color: 0xc0c5c8, emissive: 0x303840, frameColor: 0x1a1d20
       });
-      wb.position.set(-W/2 + 1.6, 1.85, -D/2 + 0.04);
+      wb.position.set(1.0, 1.85, -D/2 + 0.04);
       wb.userData.boardKind = 'steel-sheet';
       // add rivet-like studs at each corner of the frame
       const stud = new THREE.MeshStandardMaterial({ color: 0x9ea4a8, roughness: 0.4, metalness: 0.7 });
@@ -2950,32 +2956,35 @@ Out of scope for v1 (deferred)
         color: 0xc8a868, roughness: 0.85, metalness: 0.0,
         emissive: 0x3a3018, emissiveIntensity: 0.1
       });
-      const poleZs = [-D/2 + 1.6, -D/2 + 2.6];
+      // Poles run along the SIDES of the room rather than spanning
+      // front-to-back -- otherwise the hanging cloth dangles directly
+      // between the camera and the whiteboard on the front wall.
       const clothColors = [0x6a2858, 0x3848a8, 0xc88840, 0xa05060, 0x489088];
-      for (let p = 0; p < poleZs.length; p++) {
+      const poleXs = [-W/2 + 0.6, W/2 - 0.6];
+      for (let p = 0; p < poleXs.length; p++) {
         const pole = new THREE.Mesh(
-          new THREE.CylinderGeometry(0.04, 0.04, W - 0.6, 8),
+          new THREE.CylinderGeometry(0.04, 0.04, D - 0.8, 8),
           bamboo
         );
-        pole.rotation.z = Math.PI / 2;
-        pole.position.set(0, H - 0.9 - p * 0.2, poleZs[p]);
+        pole.rotation.x = Math.PI / 2;
+        pole.position.set(poleXs[p], H - 0.7, 0);
         scene.add(pole);
-        // hang cloth panels off the pole
+        // hang cloth panels off the pole, along the side of the room
         const panels = 4;
         for (let i = 0; i < panels; i++) {
           const t = (i + 0.5) / panels;
-          const cx = (t - 0.5) * (W - 1.0);
+          const cz = (t - 0.5) * (D - 1.6);
           const c = clothColors[(i + p) % clothColors.length];
           const cloth = new THREE.Mesh(
-            new THREE.PlaneGeometry(0.7, 1.2),
+            new THREE.PlaneGeometry(0.65, 0.9),
             new THREE.MeshStandardMaterial({
               color: c, roughness: 0.95, side: THREE.DoubleSide,
               emissive: c, emissiveIntensity: 0.08
             })
           );
-          cloth.position.set(cx, H - 0.9 - p * 0.2 - 0.6, poleZs[p] + (p === 0 ? 0.02 : -0.02));
-          // slight tilt for "drape"
-          cloth.rotation.z = (Math.random() - 0.5) * 0.2;
+          cloth.position.set(poleXs[p] + (p === 0 ? 0.05 : -0.05), H - 1.2, cz);
+          cloth.rotation.y = Math.PI / 2;
+          cloth.rotation.x = (Math.random() - 0.5) * 0.15;
           scene.add(cloth);
         }
       }
@@ -3485,8 +3494,11 @@ Out of scope for v1 (deferred)
       const darkPanel = new THREE.MeshStandardMaterial({
         color: 0x181612, roughness: 0.7, metalness: 0.45
       });
+      // Offset the console slightly left so the whiteboard (placed
+      // right-of-center on the front wall) stays on a clear sightline
+      // from the arrival camera at x=0.
       const consoleGroup = new THREE.Group();
-      consoleGroup.position.set(0, 0, 0.8);
+      consoleGroup.position.set(-0.8, 0, 0.8);
       // base
       const baseDesk = new THREE.Mesh(new THREE.BoxGeometry(3.6, 0.8, 1.0), darkPanel);
       baseDesk.position.set(0, 0.4, 0);
@@ -3554,7 +3566,7 @@ Out of scope for v1 (deferred)
 
       // a subtle amber console-glow point light just above the slant
       const consoleGlow = new THREE.PointLight(0xffb058, 0.9, 3, 1.7);
-      consoleGlow.position.set(0, 1.1, 0.4);
+      consoleGlow.position.set(-0.8, 1.1, 0.4);
       scene.add(consoleGlow);
 
       // ------- condenser microphone on a boom arm -------
@@ -3562,13 +3574,13 @@ Out of scope for v1 (deferred)
         color: 0x222628, roughness: 0.55, metalness: 0.75
       });
       const boomBase = new THREE.Mesh(new THREE.CylinderGeometry(0.08, 0.1, 0.06, 16), boomMat);
-      boomBase.position.set(0, 0.83, 0.8);
+      boomBase.position.set(-0.8, 0.83, 0.8);
       scene.add(boomBase);
       const boomArm1 = new THREE.Mesh(new THREE.CylinderGeometry(0.02, 0.02, 0.7, 10), boomMat);
-      boomArm1.position.set(0, 1.18, 0.8);
+      boomArm1.position.set(-0.8, 1.18, 0.8);
       scene.add(boomArm1);
       const boomArm2 = new THREE.Mesh(new THREE.CylinderGeometry(0.02, 0.02, 0.8, 10), boomMat);
-      boomArm2.position.set(0, 1.55, 0.55);
+      boomArm2.position.set(-0.8, 1.55, 0.55);
       boomArm2.rotation.x = Math.PI / 3;
       scene.add(boomArm2);
       // mic body
@@ -3576,7 +3588,7 @@ Out of scope for v1 (deferred)
         new THREE.CylinderGeometry(0.06, 0.06, 0.18, 14),
         new THREE.MeshStandardMaterial({ color: 0x141618, roughness: 0.45, metalness: 0.8 })
       );
-      micBody.position.set(0, 1.78, 0.32);
+      micBody.position.set(-0.8, 1.78, 0.32);
       scene.add(micBody);
       // mic grille (mesh sphere)
       const micGrille = new THREE.Mesh(
@@ -3584,7 +3596,7 @@ Out of scope for v1 (deferred)
         new THREE.MeshStandardMaterial({ color: 0x868a90, roughness: 0.5, metalness: 0.8,
           emissive: 0x2a1006, emissiveIntensity: 0.2 })
       );
-      micGrille.position.set(0, 1.92, 0.32);
+      micGrille.position.set(-0.8, 1.92, 0.32);
       scene.add(micGrille);
 
       // ------- vinyl record on a turntable to the side -------
@@ -4076,11 +4088,10 @@ Out of scope for v1 (deferred)
       return {
         scene, width: W, depth: D, height: H,
         backDoor, whiteboard: wb,
-        // Camera entry pose: face the left wall (where the brass
-        // plaque is). Controller's forward at yaw=-90 deg is
-        // (sin(-90), 0, -cos(-90)) = (-1, 0, 0), i.e. -X. The left
-        // wall is at -X, so the data is centered on first arrival.
-        entryYaw: THREE.MathUtils.degToRad(-90),
+        // Camera entry pose: face the front-LEFT corner of the room
+        // so both the workbench (on the front wall) and the brass
+        // plaque (on the left wall) are in frame on arrival.
+        entryYaw: THREE.MathUtils.degToRad(-45),
         doors: [backDoor]
       };
     }
