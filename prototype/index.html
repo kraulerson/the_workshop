@@ -2055,6 +2055,228 @@ Out of scope for v1 (deferred)
     }
     ROOM_BUILDERS['greenhouse'] = buildGreenhouse;
 
+    // ----------------------------------------------------------------
+    // FURNISHED: blacksmith-forge
+    //   alden-stack -> stone walls, blackened iron, leather, coal forge
+    //   with orange glow dominating the lighting; anvil, water trough,
+    //   hammered iron leaning on a wall; hand-forged frame whiteboard.
+    // ----------------------------------------------------------------
+    function buildBlacksmithForge(project, roomTypeId, shared) {
+      // stone wall texture — large irregular stones via plaster-with-noise
+      const stone = plasterTexture({ base: '#4a4540', noise: 30 });
+      stone.repeat.set(2.5, 1.5);
+      const stoneMat = new THREE.MeshStandardMaterial({
+        map: stone, color: 0x686058, roughness: 0.95
+      });
+      // floor: dark slate-ish with subtle pattern
+      const floorStone = plasterTexture({ base: '#33302c', noise: 22 });
+      floorStone.repeat.set(3, 3);
+      const floorMat = new THREE.MeshStandardMaterial({
+        map: floorStone, color: 0x504a44, roughness: 0.95
+      });
+      // ceiling: dark wooden beams over plaster
+      const ceilingMat = new THREE.MeshStandardMaterial({
+        color: 0x1a1410, roughness: 1.0
+      });
+
+      const shell = makeRoomShell({
+        width: 7.0, depth: 6.5, height: 4.0,
+        floorMaterial: floorMat, ceilingMaterial: ceilingMat,
+        wallFront: stoneMat, wallBack: stoneMat,
+        wallLeft: stoneMat, wallRight: stoneMat,
+        fogColor: 0x1a0d05, fogNear: 4, fogFar: 18
+      });
+      const scene = shell.scene;
+      const W = shell.width, D = shell.depth, H = shell.height;
+
+      // ceiling beams — three exposed timbers spanning the room
+      const beamMat = new THREE.MeshStandardMaterial({ color: 0x261610, roughness: 1.0 });
+      for (const x of [-W/3, 0, W/3]) {
+        const beam = new THREE.Mesh(new THREE.BoxGeometry(0.32, 0.32, D), beamMat);
+        beam.position.set(x, H - 0.18, 0);
+        scene.add(beam);
+      }
+
+      // Lighting: forge dominates. Very low ambient red-orange.
+      scene.add(new THREE.AmbientLight(0x2a1408, 0.45));
+      // a weak cool "open door" daylight slicing in from -X
+      const door = new THREE.DirectionalLight(0xfff0d4, 0.7);
+      door.position.set(-3, 4, 2);
+      scene.add(door);
+
+      // ----- coal forge -----
+      // a stout brick box with a glowing orange center
+      const forgeGroup = new THREE.Group();
+      forgeGroup.position.set(-1.4, 0, 0.6);
+      const brickTex = brickTexture({
+        size: 256, brickW: 60, brickH: 30,
+        mortar: '#2a1d18', baseR: 80, baseG: 50, baseB: 42, jitter: 24
+      });
+      brickTex.repeat.set(2, 1);
+      const forgeBrick = new THREE.MeshStandardMaterial({
+        map: brickTex, color: 0x6a4030, roughness: 1.0
+      });
+      const forgeBody = new THREE.Mesh(new THREE.BoxGeometry(1.7, 0.85, 1.2), forgeBrick);
+      forgeBody.position.set(0, 0.42, 0);
+      forgeGroup.add(forgeBody);
+      // hearth (sunken top with coals)
+      const hearth = new THREE.Mesh(
+        new THREE.BoxGeometry(1.3, 0.18, 0.85),
+        new THREE.MeshStandardMaterial({ color: 0x080604, roughness: 1.0 })
+      );
+      hearth.position.set(0, 0.85, 0);
+      forgeGroup.add(hearth);
+      // glowing coals — emissive plane just above hearth
+      const coalsMat = new THREE.MeshBasicMaterial({ color: 0xff5010 });
+      const coals = new THREE.Mesh(new THREE.PlaneGeometry(1.15, 0.7), coalsMat);
+      coals.rotation.x = -Math.PI / 2;
+      coals.position.set(0, 0.92, 0);
+      forgeGroup.add(coals);
+      // a couple of darker chunks for texture
+      for (let i = 0; i < 8; i++) {
+        const chunk = new THREE.Mesh(
+          new THREE.BoxGeometry(0.12 + Math.random()*0.1, 0.06, 0.1 + Math.random()*0.1),
+          new THREE.MeshStandardMaterial({ color: 0x1a0c06, roughness: 1.0, emissive: 0x4a1a06, emissiveIntensity: 0.5 })
+        );
+        chunk.position.set((Math.random() - 0.5) * 0.9, 0.92, (Math.random() - 0.5) * 0.55);
+        chunk.rotation.y = Math.random() * Math.PI;
+        forgeGroup.add(chunk);
+      }
+      // chimney hood above
+      const hoodMat = new THREE.MeshStandardMaterial({ color: 0x141008, roughness: 0.95, metalness: 0.4 });
+      const hood = new THREE.Mesh(new THREE.ConeGeometry(0.95, 1.0, 4), hoodMat);
+      hood.position.set(0, 1.65, 0);
+      hood.rotation.y = Math.PI / 4;
+      forgeGroup.add(hood);
+      const flue = new THREE.Mesh(new THREE.CylinderGeometry(0.22, 0.22, 1.7, 12), hoodMat);
+      flue.position.set(0, 2.95, 0);
+      forgeGroup.add(flue);
+      scene.add(forgeGroup);
+
+      // the dominant orange light source — sits above the coals,
+      // pointing down. Very strong, short range so it pools.
+      const forgeLight = new THREE.PointLight(0xff7028, 4.5, 9, 1.7);
+      forgeLight.position.set(forgeGroup.position.x, 1.1, forgeGroup.position.z);
+      scene.add(forgeLight);
+      // a second softer light to push warmth across the room
+      const forgeFill = new THREE.PointLight(0xff4a18, 1.2, 14, 1.8);
+      forgeFill.position.set(forgeGroup.position.x, 2.2, forgeGroup.position.z);
+      scene.add(forgeFill);
+
+      // ----- anvil on a stump -----
+      const stumpMat = new THREE.MeshStandardMaterial({
+        color: 0x3a2210, roughness: 0.95
+      });
+      const stump = new THREE.Mesh(new THREE.CylinderGeometry(0.32, 0.36, 0.72, 16), stumpMat);
+      stump.position.set(0.6, 0.36, 1.0);
+      scene.add(stump);
+      const ironMat = new THREE.MeshStandardMaterial({
+        color: 0x1a1814, roughness: 0.55, metalness: 0.7
+      });
+      // anvil body (trapezoid approximated by a couple of boxes)
+      const anvilBase = new THREE.Mesh(new THREE.BoxGeometry(0.55, 0.10, 0.22), ironMat);
+      anvilBase.position.set(0.6, 0.78, 1.0);
+      scene.add(anvilBase);
+      const anvilTop = new THREE.Mesh(new THREE.BoxGeometry(0.75, 0.10, 0.22), ironMat);
+      anvilTop.position.set(0.6, 0.88, 1.0);
+      scene.add(anvilTop);
+      // horn (cone) at one end
+      const anvilHorn = new THREE.Mesh(new THREE.ConeGeometry(0.11, 0.30, 12), ironMat);
+      anvilHorn.position.set(0.6 + 0.52, 0.88, 1.0);
+      anvilHorn.rotation.z = -Math.PI / 2;
+      scene.add(anvilHorn);
+
+      // ----- water trough -----
+      const woodTrough = new THREE.MeshStandardMaterial({
+        color: 0x4a2a16, roughness: 0.95
+      });
+      const trough = new THREE.Mesh(new THREE.BoxGeometry(1.0, 0.42, 0.6), woodTrough);
+      trough.position.set(1.6, 0.21, -0.4);
+      scene.add(trough);
+      // water surface
+      const water = new THREE.Mesh(
+        new THREE.PlaneGeometry(0.92, 0.52),
+        new THREE.MeshStandardMaterial({
+          color: 0x1a2a30, roughness: 0.2, metalness: 0.1,
+          emissive: 0x4a2010, emissiveIntensity: 0.25  // catches forge glow
+        })
+      );
+      water.rotation.x = -Math.PI / 2;
+      water.position.set(1.6, 0.40, -0.4);
+      scene.add(water);
+
+      // ----- hammered iron pieces hanging on the right wall -----
+      const toolMat = new THREE.MeshStandardMaterial({
+        color: 0x1c1814, roughness: 0.55, metalness: 0.65
+      });
+      const tongs = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.5, 0.02), toolMat);
+      tongs.position.set(W/2 - 0.08, 1.9, -1.2);
+      tongs.rotation.z = Math.PI / 12;
+      scene.add(tongs);
+      const hammer1 = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.45, 0.02), toolMat);
+      hammer1.position.set(W/2 - 0.08, 1.85, -0.7);
+      scene.add(hammer1);
+      const hammer1Head = new THREE.Mesh(new THREE.BoxGeometry(0.16, 0.08, 0.08), toolMat);
+      hammer1Head.position.set(W/2 - 0.12, 2.05, -0.7);
+      scene.add(hammer1Head);
+      const hammer2 = hammer1.clone();
+      hammer2.position.z = -0.3;
+      scene.add(hammer2);
+      const hammer2Head = hammer1Head.clone();
+      hammer2Head.position.z = -0.3;
+      hammer2Head.scale.set(0.7, 0.7, 1);
+      scene.add(hammer2Head);
+      // a pegboard backing strip
+      const peg = new THREE.Mesh(
+        new THREE.BoxGeometry(0.04, 0.04, 2.0),
+        new THREE.MeshStandardMaterial({ color: 0x261610, roughness: 1.0 })
+      );
+      peg.position.set(W/2 - 0.10, 2.2, -0.7);
+      scene.add(peg);
+
+      // ----- whiteboard with hand-forged iron frame on the front wall -----
+      // The board itself is a slightly-warm slate; the frame is built
+      // from box bars with a slight emissive iron tone.
+      const wb = makePlaceholderWhiteboard({
+        width: 2.8, height: 1.7,
+        color: 0x2a2422, emissive: 0x180c08, frameColor: 0x141210
+      });
+      wb.position.set(0, 1.8, -D/2 + 0.04);
+      // beef up the frame with chunky decorative iron straps
+      const strapMat = new THREE.MeshStandardMaterial({
+        color: 0x1c1814, roughness: 0.55, metalness: 0.7
+      });
+      const strap = new THREE.Mesh(new THREE.BoxGeometry(0.12, 1.85, 0.04), strapMat);
+      strap.position.set(-1.45, 0, 0.01);
+      wb.add(strap);
+      const strap2 = strap.clone();
+      strap2.position.x = 1.45;
+      wb.add(strap2);
+      // a couple of "rivets"
+      const rivetGeo = new THREE.SphereGeometry(0.04, 12, 8);
+      for (const sx of [-1.45, 1.45]) {
+        for (const sy of [-0.78, 0.78]) {
+          const r = new THREE.Mesh(rivetGeo, strapMat);
+          r.position.set(sx, sy, 0.025);
+          wb.add(r);
+        }
+      }
+      wb.userData.boardKind = 'iron-framed-slate';
+      scene.add(wb);
+
+      // back door
+      const backDoor = buildBackDoor(D, shared.doorWood);
+      scene.add(backDoor);
+
+      return {
+        scene, width: W, depth: D, height: H,
+        backDoor, whiteboard: wb,
+        entryYaw: 0,
+        doors: [backDoor]
+      };
+    }
+    ROOM_BUILDERS['blacksmith-forge'] = buildBlacksmithForge;
+
     function buildRoomForProject(project, shared) {
       const roomTypeId = project.room_type || assignRoom(project.id);
       const builder = ROOM_BUILDERS[roomTypeId] || STUB_ROOM_BUILDER;
