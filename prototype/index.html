@@ -3033,6 +3033,228 @@ Out of scope for v1 (deferred)
     ROOM_BUILDERS['dye-vat-room'] = buildDyeVatRoom;
 
     // ----------------------------------------------------------------
+    // FURNISHED: foundry
+    //   lancache-orchestrator -> sand floor, firebrick walls,
+    //   blackened iron, melting furnace dominating the lighting,
+    //   sand-casting flasks on the floor. Etched slate plaque on stone.
+    // ----------------------------------------------------------------
+    function buildFoundry(project, roomTypeId, shared) {
+      const sand = plasterTexture({ base: '#8a7048', noise: 28 });
+      sand.repeat.set(3, 3);
+      const floorMat = new THREE.MeshStandardMaterial({
+        map: sand, color: 0x8a7250, roughness: 1.0
+      });
+      // firebrick — warmer, lighter than red brick
+      const firebrick = brickTexture({
+        size: 512, brickW: 84, brickH: 30,
+        mortar: '#3a281c', baseR: 188, baseG: 124, baseB: 78, jitter: 24
+      });
+      firebrick.repeat.set(2.5, 1.5);
+      const wallMat = new THREE.MeshStandardMaterial({
+        map: firebrick, color: 0xc89868, roughness: 0.95
+      });
+      const ceilingMat = new THREE.MeshStandardMaterial({
+        color: 0x141008, roughness: 1.0
+      });
+
+      const shell = makeRoomShell({
+        width: 7.0, depth: 6.5, height: 4.2,
+        floorMaterial: floorMat, ceilingMaterial: ceilingMat,
+        wallFront: wallMat, wallBack: wallMat, wallLeft: wallMat, wallRight: wallMat,
+        fogColor: 0x180d04, fogNear: 4, fogFar: 18
+      });
+      const scene = shell.scene;
+      const W = shell.width, D = shell.depth, H = shell.height;
+
+      // ceiling crossbeams
+      const beamMat = new THREE.MeshStandardMaterial({ color: 0x261008, roughness: 1.0 });
+      for (const x of [-W/3, W/3]) {
+        const beam = new THREE.Mesh(new THREE.BoxGeometry(0.4, 0.4, D), beamMat);
+        beam.position.set(x, H - 0.22, 0);
+        scene.add(beam);
+      }
+
+      // dim ambient
+      scene.add(new THREE.AmbientLight(0x2a1810, 0.45));
+      // a very weak cool fill so corners don't go absolute black
+      scene.add(new THREE.HemisphereLight(0x4a4032, 0x0a0604, 0.25));
+
+      // ------- big melting furnace, centered slightly back -------
+      const furnaceMat = new THREE.MeshStandardMaterial({
+        map: firebrick, color: 0xa07050, roughness: 0.95
+      });
+      const ironDark = new THREE.MeshStandardMaterial({
+        color: 0x121008, roughness: 0.7, metalness: 0.55
+      });
+
+      const furnaceGroup = new THREE.Group();
+      furnaceGroup.position.set(-0.5, 0, 0.4);
+      // squat brick body — wider at base
+      const fBase = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.95, 1.05, 0.4, 24),
+        furnaceMat
+      );
+      fBase.position.set(0, 0.2, 0);
+      furnaceGroup.add(fBase);
+      // upper barrel
+      const fBarrel = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.85, 0.95, 1.7, 24),
+        furnaceMat
+      );
+      fBarrel.position.set(0, 1.25, 0);
+      furnaceGroup.add(fBarrel);
+      // iron band rings
+      for (const y of [0.45, 1.6, 2.0]) {
+        const band = new THREE.Mesh(
+          new THREE.CylinderGeometry(0.94, 0.94, 0.06, 28),
+          ironDark
+        );
+        band.position.set(0, y, 0);
+        furnaceGroup.add(band);
+      }
+      // tap-hole on the front — glowing slit
+      const tapHole = new THREE.Mesh(
+        new THREE.PlaneGeometry(0.32, 0.18),
+        new THREE.MeshBasicMaterial({ color: 0xffa040 })
+      );
+      tapHole.position.set(0, 0.55, 0.96);
+      furnaceGroup.add(tapHole);
+      // taller chimney
+      const chimney = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.32, 0.32, 1.6, 16),
+        ironDark
+      );
+      chimney.position.set(0, 2.9, 0);
+      furnaceGroup.add(chimney);
+      // top crown glow
+      const crown = new THREE.Mesh(
+        new THREE.CircleGeometry(0.55, 24),
+        new THREE.MeshBasicMaterial({ color: 0xffb060 })
+      );
+      crown.rotation.x = -Math.PI / 2;
+      crown.position.set(0, 2.11, 0);
+      furnaceGroup.add(crown);
+      scene.add(furnaceGroup);
+
+      // dominant orange light from inside the furnace
+      const fInside = new THREE.PointLight(0xff7028, 7.0, 12, 1.5);
+      fInside.position.copy(furnaceGroup.position);
+      fInside.position.y = 1.2;
+      scene.add(fInside);
+      // a softer warmth higher up
+      const fCrown = new THREE.PointLight(0xff8a40, 2.0, 9, 1.7);
+      fCrown.position.copy(furnaceGroup.position);
+      fCrown.position.y = 2.2;
+      scene.add(fCrown);
+      // a small light AT the tap hole pointing outward (cheats a glow on the sand)
+      const fTap = new THREE.PointLight(0xff8030, 1.5, 4, 2.0);
+      fTap.position.set(furnaceGroup.position.x, 0.55, furnaceGroup.position.z + 1.4);
+      scene.add(fTap);
+
+      // ------- crucible on a stand off to the side -------
+      const cStand = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.22, 0.32, 0.5, 14),
+        ironDark
+      );
+      cStand.position.set(1.6, 0.25, -0.4);
+      scene.add(cStand);
+      const crucible = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.22, 0.16, 0.32, 14),
+        new THREE.MeshStandardMaterial({ color: 0x2a1810, roughness: 0.6, metalness: 0.5,
+          emissive: 0xff5020, emissiveIntensity: 0.35 })
+      );
+      crucible.position.set(1.6, 0.66, -0.4);
+      scene.add(crucible);
+      const molten = new THREE.Mesh(
+        new THREE.CircleGeometry(0.18, 16),
+        new THREE.MeshBasicMaterial({ color: 0xfff080 })
+      );
+      molten.rotation.x = -Math.PI / 2;
+      molten.position.set(1.6, 0.82, -0.4);
+      scene.add(molten);
+      const moltenGlow = new THREE.PointLight(0xffa050, 1.4, 3, 1.7);
+      moltenGlow.position.set(1.6, 1.0, -0.4);
+      scene.add(moltenGlow);
+
+      // ------- sand-casting flasks on the floor -------
+      const flaskFrame = new THREE.MeshStandardMaterial({ color: 0x2a1810, roughness: 0.85, metalness: 0.3 });
+      const moldSand = new THREE.MeshStandardMaterial({ color: 0x6a5238, roughness: 1.0 });
+      function flask(x, z) {
+        const g = new THREE.Group();
+        const top = new THREE.Mesh(new THREE.BoxGeometry(0.7, 0.08, 0.5), flaskFrame);
+        top.position.set(x, 0.34, z);
+        g.add(top);
+        const bot = top.clone();
+        bot.position.y = 0.16;
+        g.add(bot);
+        const sandTop = new THREE.Mesh(new THREE.BoxGeometry(0.62, 0.09, 0.42), moldSand);
+        sandTop.position.set(x, 0.29, z);
+        g.add(sandTop);
+        return g;
+      }
+      scene.add(flask(-2.2, -1.6));
+      scene.add(flask(-1.4, -1.6));
+      scene.add(flask(1.4, 1.8));
+
+      // ------- pouring ladle leaning against the right wall -------
+      const ladleHandle = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.025, 0.025, 1.8, 10),
+        new THREE.MeshStandardMaterial({ color: 0x3a2010, roughness: 0.95 })
+      );
+      ladleHandle.position.set(W/2 - 0.4, 0.9, -1.0);
+      ladleHandle.rotation.z = Math.PI / 14;
+      scene.add(ladleHandle);
+      const ladleBowl = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.16, 0.12, 0.22, 14),
+        ironDark
+      );
+      ladleBowl.position.set(W/2 - 0.4 - 0.13, 1.7, -1.0);
+      scene.add(ladleBowl);
+
+      // a heap of charcoal/coke chunks near the front
+      const cokeMat = new THREE.MeshStandardMaterial({
+        color: 0x141008, roughness: 1.0, emissive: 0x3a1006, emissiveIntensity: 0.4
+      });
+      for (let i = 0; i < 12; i++) {
+        const ch = new THREE.Mesh(
+          new THREE.BoxGeometry(0.12 + Math.random()*0.1, 0.1, 0.1 + Math.random()*0.08),
+          cokeMat
+        );
+        ch.position.set(-1.4 + (Math.random() - 0.5) * 0.7, 0.05, 2.0 + (Math.random() - 0.5) * 0.7);
+        ch.rotation.y = Math.random() * Math.PI;
+        scene.add(ch);
+      }
+
+      // whiteboard — etched slate plaque on the front (firebrick) wall
+      const wb = makePlaceholderWhiteboard({
+        width: 2.6, height: 1.6,
+        color: 0x2a2218, emissive: 0x140c06, frameColor: 0x141008
+      });
+      wb.position.set(W/2 - 1.8, 1.8, -D/2 + 0.04);
+      wb.userData.boardKind = 'iron-framed-slate';
+      // little iron pegs that hold the slate against the wall
+      const pegMat = new THREE.MeshStandardMaterial({ color: 0x141008, roughness: 0.6, metalness: 0.7 });
+      for (const [sx, sy] of [[-1.3, 0.75], [1.3, 0.75], [-1.3, -0.75], [1.3, -0.75]]) {
+        const peg = new THREE.Mesh(new THREE.CylinderGeometry(0.04, 0.04, 0.05, 10), pegMat);
+        peg.rotation.x = Math.PI / 2;
+        peg.position.set(sx, sy, 0.03);
+        wb.add(peg);
+      }
+      scene.add(wb);
+
+      const backDoor = buildBackDoor(D, shared.doorWood);
+      scene.add(backDoor);
+
+      return {
+        scene, width: W, depth: D, height: H,
+        backDoor, whiteboard: wb,
+        entryYaw: 0,
+        doors: [backDoor]
+      };
+    }
+    ROOM_BUILDERS['foundry'] = buildFoundry;
+
+    // ----------------------------------------------------------------
     // Whiteboard data rendering. Each furnished room declares a
     // boardKind (etched-glass / chalkboard / iron-framed-slate / ...);
     // we render the project record to a 2048x1280 canvas styled to
