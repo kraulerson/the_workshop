@@ -2277,12 +2277,317 @@ Out of scope for v1 (deferred)
     }
     ROOM_BUILDERS['blacksmith-forge'] = buildBlacksmithForge;
 
+    // ----------------------------------------------------------------
+    // Whiteboard data rendering. Each furnished room declares a
+    // boardKind (etched-glass / chalkboard / iron-framed-slate / ...);
+    // we render the project record to a 2048x1280 canvas styled to
+    // match the kind, then swap the board's material to an unlit
+    // MeshBasicMaterial mapped to that canvas. Unlit keeps the data
+    // readable regardless of the (sometimes very dim) room lighting,
+    // and the texture itself carries the visual styling.
+    // ----------------------------------------------------------------
+    const WB_THEMES = {
+      'etched-glass': {
+        bg: '#0c1418',
+        panel: '#cad8dc',
+        text: '#0a1418',
+        muted: '#3a5a68',
+        accent: '#1f6080',
+        warn: '#a83040',
+        titleFont:  '700 78px "Helvetica Neue", -apple-system, sans-serif',
+        subFont:    '500 40px "Helvetica Neue", -apple-system, sans-serif',
+        headingFont:'600 44px "Helvetica Neue", -apple-system, sans-serif',
+        bodyFont:   '400 32px "Helvetica Neue", -apple-system, sans-serif',
+        dateFont:   '700 30px "SF Mono", "Menlo", monospace',
+        showFrameLine: true
+      },
+      'chalkboard': {
+        bg: '#1a2418',
+        panel: null,             // no inner panel; chalk on a dark slate
+        text: '#f4ecc8',
+        muted: '#b8b08a',
+        accent: '#c8e0a8',
+        warn: '#f0b860',
+        titleFont:  '700 78px "Bradley Hand", "Marker Felt", "Comic Sans MS", cursive',
+        subFont:    '500 38px "Bradley Hand", "Marker Felt", cursive',
+        headingFont:'700 44px "Bradley Hand", "Marker Felt", cursive',
+        bodyFont:   '400 30px "Bradley Hand", "Marker Felt", cursive',
+        dateFont:   '700 28px "Bradley Hand", "Marker Felt", cursive',
+        showFrameLine: false
+      },
+      'iron-framed-slate': {
+        bg: '#161210',
+        panel: '#2c2620',
+        text: '#f0e2c4',
+        muted: '#a08868',
+        accent: '#e8a050',
+        warn: '#e85040',
+        titleFont:  '700 78px Georgia, "Times New Roman", serif',
+        subFont:    '400 38px Georgia, serif',
+        headingFont:'700 44px Georgia, serif',
+        bodyFont:   '400 30px Georgia, serif',
+        dateFont:   '700 28px Georgia, serif',
+        showFrameLine: true
+      },
+      'default': {
+        bg: '#1a1410',
+        panel: '#f0e6d0',
+        text: '#1a1410',
+        muted: '#6a5a44',
+        accent: '#a07a3a',
+        warn: '#c44c4c',
+        titleFont:  '700 78px -apple-system, "Segoe UI", sans-serif',
+        subFont:    '500 40px -apple-system, "Segoe UI", sans-serif',
+        headingFont:'600 44px -apple-system, "Segoe UI", sans-serif',
+        bodyFont:   '400 32px -apple-system, "Segoe UI", sans-serif',
+        dateFont:   '700 30px "SF Mono", monospace',
+        showFrameLine: true
+      }
+    };
+
+    // wrap text horizontally; returns the new y after drawing
+    function drawWrappedText(ctx, text, x, y, maxWidth, lineHeight) {
+      if (!text) return y;
+      const words = text.split(/\s+/);
+      let line = '';
+      for (const w of words) {
+        const trial = line ? line + ' ' + w : w;
+        if (ctx.measureText(trial).width > maxWidth && line) {
+          ctx.fillText(line, x, y);
+          y += lineHeight;
+          line = w;
+        } else {
+          line = trial;
+        }
+      }
+      if (line) { ctx.fillText(line, x, y); y += lineHeight; }
+      return y;
+    }
+
+    function renderWhiteboardCanvas(project, kind) {
+      const theme = WB_THEMES[kind] || WB_THEMES['default'];
+      const c = document.createElement('canvas');
+      c.width = 2048; c.height = 1280;
+      const ctx = c.getContext('2d');
+
+      // background
+      ctx.fillStyle = theme.bg;
+      ctx.fillRect(0, 0, c.width, c.height);
+      // inner panel (skipped for chalkboard so text reads on raw slate)
+      const pad = 90;
+      if (theme.panel) {
+        ctx.fillStyle = theme.panel;
+        ctx.fillRect(pad - 40, pad - 40, c.width - (pad - 40) * 2, c.height - (pad - 40) * 2);
+      }
+      if (theme.showFrameLine) {
+        ctx.strokeStyle = theme.accent;
+        ctx.lineWidth = 4;
+        ctx.strokeRect(pad - 20, pad - 20, c.width - (pad - 20) * 2, c.height - (pad - 20) * 2);
+      }
+
+      const left = pad + 30;
+      const right = c.width - pad - 30;
+      const maxW = right - left;
+      let y = pad + 90;
+
+      // title
+      ctx.fillStyle = theme.text;
+      ctx.font = theme.titleFont;
+      ctx.textBaseline = 'alphabetic';
+      ctx.fillText(project.name, left, y);
+      y += 30;
+
+      // tagline (one line; truncate if too long)
+      ctx.fillStyle = theme.muted;
+      ctx.font = theme.subFont;
+      const tagline = project.tagline || '';
+      let tag = tagline;
+      while (ctx.measureText(tag).width > maxW && tag.length > 4) tag = tag.slice(0, -2);
+      if (tag.length < tagline.length) tag = tag.slice(0, -3) + '...';
+      ctx.fillText(tag, left, y + 36);
+      y += 80;
+
+      // current state (wrapped, 2 lines max)
+      if (project.current_state) {
+        ctx.fillStyle = theme.text;
+        ctx.font = theme.bodyFont;
+        const lineH = 42;
+        // limit to 2 lines manually
+        const words = project.current_state.split(/\s+/);
+        let line = '';
+        let lines = [];
+        for (const w of words) {
+          const trial = line ? line + ' ' + w : w;
+          if (ctx.measureText(trial).width > maxW && line) {
+            lines.push(line); line = w;
+            if (lines.length === 2) break;
+          } else { line = trial; }
+        }
+        if (line && lines.length < 2) lines.push(line);
+        if (lines.length === 2 && project.current_state.split(/\s+/).length > lines.join(' ').split(/\s+/).length) {
+          // truncate second line with ellipsis
+          while (ctx.measureText(lines[1] + '...').width > maxW && lines[1].length > 4) lines[1] = lines[1].slice(0, -1);
+          lines[1] += '...';
+        }
+        for (const ln of lines) { ctx.fillText(ln, left, y); y += lineH; }
+        y += 10;
+      }
+
+      // divider
+      ctx.fillStyle = theme.accent;
+      ctx.fillRect(left, y, 320, 3);
+      y += 30;
+
+      const lineH = 40;
+      const itemGap = 16;
+
+      // ACTION ITEMS
+      if (Array.isArray(project.action_items) && project.action_items.length) {
+        ctx.fillStyle = theme.accent;
+        ctx.font = theme.headingFont;
+        ctx.fillText('Action items', left, y);
+        y += 56;
+        ctx.font = theme.bodyFont;
+        ctx.fillStyle = theme.text;
+        const items = project.action_items.slice(0, 5);
+        for (const item of items) {
+          // checkbox
+          ctx.strokeStyle = theme.accent;
+          ctx.lineWidth = 3;
+          ctx.strokeRect(left, y - 28, 28, 28);
+          // text (wrapped, max 2 lines)
+          const tx = left + 50, tw = maxW - 50;
+          const before = y;
+          const words = item.split(/\s+/);
+          let line = '', lines = [];
+          for (const w of words) {
+            const trial = line ? line + ' ' + w : w;
+            if (ctx.measureText(trial).width > tw && line) {
+              lines.push(line); line = w;
+              if (lines.length === 2) break;
+            } else { line = trial; }
+          }
+          if (line && lines.length < 2) lines.push(line);
+          if (lines.length === 2 && item.split(/\s+/).length > lines.join(' ').split(/\s+/).length) {
+            while (ctx.measureText(lines[1] + '...').width > tw && lines[1].length > 4) lines[1] = lines[1].slice(0, -1);
+            lines[1] += '...';
+          }
+          for (const ln of lines) { ctx.fillText(ln, tx, y); y += lineH; }
+          y += itemGap;
+          // cap total height — if we run past 880, bail
+          if (y > 880) break;
+        }
+        y += 10;
+      }
+
+      // OPEN ITEMS (warnings)
+      if (Array.isArray(project.open_items) && project.open_items.length && y < 1000) {
+        ctx.fillStyle = theme.warn;
+        ctx.font = theme.headingFont;
+        ctx.fillText('Open items', left, y);
+        y += 56;
+        ctx.font = theme.bodyFont;
+        const items = project.open_items.slice(0, 2);
+        for (const item of items) {
+          // warning triangle
+          ctx.fillStyle = theme.warn;
+          ctx.beginPath();
+          ctx.moveTo(left + 14, y - 30);
+          ctx.lineTo(left + 28, y);
+          ctx.lineTo(left, y);
+          ctx.closePath();
+          ctx.fill();
+          // exclamation
+          ctx.fillStyle = theme.bg;
+          ctx.font = '700 22px sans-serif';
+          ctx.fillText('!', left + 11, y - 6);
+          ctx.font = theme.bodyFont;
+          ctx.fillStyle = theme.text;
+          const tx = left + 50, tw = maxW - 50;
+          y = drawWrappedText(ctx, item, tx, y, tw, lineH);
+          y += itemGap;
+          if (y > 1100) break;
+        }
+        y += 10;
+      }
+
+      // RECENT ACTIVITY (always rendered if room — right column placement
+      // if there's still vertical budget; otherwise skip)
+      if (Array.isArray(project.action_log) && project.action_log.length) {
+        // place in a second column on the right half if the first
+        // column got tall, otherwise continue below.
+        const startCol2 = y > 800;
+        let cx = left, cy = y, cw = maxW;
+        if (startCol2) {
+          cx = left + maxW * 0.55;
+          cy = pad + 280;
+          cw = maxW * 0.45;
+        }
+        ctx.fillStyle = theme.accent;
+        ctx.font = theme.headingFont;
+        ctx.fillText('Recent activity', cx, cy);
+        cy += 56;
+        ctx.font = theme.bodyFont;
+        const entries = project.action_log.slice(0, 3);
+        for (const e of entries) {
+          ctx.fillStyle = theme.muted;
+          ctx.font = theme.dateFont;
+          ctx.fillText(e.date, cx, cy);
+          cy += 38;
+          ctx.fillStyle = theme.text;
+          ctx.font = theme.bodyFont;
+          cy = drawWrappedText(ctx, e.content, cx, cy, cw, lineH);
+          cy += itemGap;
+          if (cy > 1200) break;
+        }
+      }
+
+      // status badge bottom-right
+      const statusMeta = {
+        shipped: { label: 'Operational', color: '#5fc36a' },
+        active:  { label: 'In Build',    color: '#e3a23a' },
+        blocked: { label: 'Blocked',     color: '#c44c4c' },
+        scoped:  { label: 'Scoped',      color: '#7090c0' },
+        planned: { label: 'Planned',     color: '#7090c0' }
+      }[project.status] || { label: project.status || '', color: theme.muted };
+      ctx.fillStyle = statusMeta.color;
+      ctx.font = '700 32px -apple-system, "Segoe UI", sans-serif';
+      const label = statusMeta.label.toUpperCase();
+      const labelW = ctx.measureText(label).width;
+      ctx.fillRect(right - labelW - 40, c.height - pad - 26, labelW + 30, 50);
+      ctx.fillStyle = theme.bg;
+      ctx.fillText(label, right - labelW - 25, c.height - pad + 8);
+
+      return c;
+    }
+
+    function applyWhiteboardData(built, project) {
+      const wb = built.whiteboard;
+      if (!wb) return;
+      const kind = wb.userData.boardKind || 'default';
+      const canvas = renderWhiteboardCanvas(project, kind);
+      const tex = new THREE.CanvasTexture(canvas);
+      tex.colorSpace = THREE.SRGBColorSpace;
+      tex.anisotropy = 8;
+      // swap to an unlit material so the data is always readable
+      // (the rest of the room is correctly lit by its own lights,
+      // and the board's frame mesh already carries the surrounding
+      // material treatment).
+      const board = wb.userData.board;
+      if (board) {
+        board.material.dispose?.();
+        board.material = new THREE.MeshBasicMaterial({ map: tex });
+      }
+    }
+
     function buildRoomForProject(project, shared) {
       const roomTypeId = project.room_type || assignRoom(project.id);
       const builder = ROOM_BUILDERS[roomTypeId] || STUB_ROOM_BUILDER;
       const built = builder(project, roomTypeId, shared);
       built.project = project;
       built.roomTypeId = roomTypeId;
+      // populate the whiteboard with project data for furnished rooms
+      applyWhiteboardData(built, project);
       return built;
     }
 
