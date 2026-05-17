@@ -145,6 +145,16 @@ Out of scope for v1 (deferred)
       transition: opacity 300ms;
     }
     #hint.dim { opacity: 0.25; }
+    #hint.hidden { display: none; }
+    #back-hint {
+      align-self: center;
+      font-size: 12px;
+      padding: 8px 14px;
+      background: rgba(0,0,0,0.45);
+      border-radius: 999px;
+      opacity: 0.9;
+    }
+    #back-hint.hidden { display: none; }
     #loading {
       position: fixed; inset: 0;
       display: flex; align-items: center; justify-content: center;
@@ -153,6 +163,13 @@ Out of scope for v1 (deferred)
       transition: opacity 400ms;
     }
     #loading.hidden { opacity: 0; pointer-events: none; }
+    #flash {
+      position: fixed; inset: 0;
+      background: #000;
+      opacity: 0;
+      pointer-events: none;
+      transition: none; /* opacity driven directly from JS frame loop */
+    }
   </style>
 </head>
 <body>
@@ -163,8 +180,10 @@ Out of scope for v1 (deferred)
       <span id="subtitle">Lobby</span>
     </div>
     <div id="hint">Move the mouse to look around &middot; click-drag for fine control &middot; click a door to enter</div>
+    <div id="back-hint" class="hidden">Click the back door or press <kbd>Esc</kbd> to return to the lobby</div>
   </div>
   <div id="loading">Building the workshop&hellip;</div>
+  <div id="flash"></div>
 
   <script type="application/json" id="projects-data">{
   "meta": {
@@ -1396,9 +1415,380 @@ Out of scope for v1 (deferred)
     }
 
     // ----------------------------------------------------------------
-    // WorkshopApp — boots Three.js, builds the lobby, drives the loop.
-    // Walk-through animation lands in the next commit; for now,
-    // clicking a door just logs which project was picked.
+    // Room shell — reusable box-shaped room geometry. Per-room builders
+    // call this to get floor / walls / ceiling, then add decor + a
+    // whiteboard on top.
+    //
+    // Coordinate convention for rooms:
+    //   - room is axis-aligned, dims = w (X) by d (Z) by h (Y)
+    //   - camera enters at z = +d/2 - 0.4 looking toward -Z
+    //     (the FRONT wall, where the whiteboard sits)
+    //   - back-door sits on the back wall at z = +d/2
+    //   - +X is "right" of camera entry, -X is "left"
+    // ----------------------------------------------------------------
+    function makeRoomShell(opts) {
+      const {
+        width = 6.5, depth = 6.5, height = 4.0,
+        floorMaterial, ceilingMaterial,
+        wallFront, wallBack, wallLeft, wallRight,  // materials, may differ
+        fogColor = 0x100808, fogNear = 5, fogFar = 22
+      } = opts;
+
+      const scene = new THREE.Scene();
+      scene.background = new THREE.Color(fogColor);
+      scene.fog = new THREE.Fog(fogColor, fogNear, fogFar);
+
+      const floor = new THREE.Mesh(new THREE.PlaneGeometry(width, depth), floorMaterial);
+      floor.rotation.x = -Math.PI / 2;
+      scene.add(floor);
+
+      const ceiling = new THREE.Mesh(new THREE.PlaneGeometry(width, depth), ceilingMaterial);
+      ceiling.rotation.x = Math.PI / 2;
+      ceiling.position.y = height;
+      scene.add(ceiling);
+
+      // Walls: each is a plane facing inward.
+      const mkWall = (mat, w, h, pos, rotY) => {
+        const m = new THREE.Mesh(new THREE.PlaneGeometry(w, h), mat);
+        m.position.set(pos.x, pos.y, pos.z);
+        m.rotation.y = rotY;
+        return m;
+      };
+      // front wall (camera looks at): z = -depth/2, normal +Z
+      scene.add(mkWall(wallFront, width, height, { x: 0, y: height/2, z: -depth/2 }, 0));
+      // back wall (behind camera): z = +depth/2, normal -Z
+      scene.add(mkWall(wallBack, width, height, { x: 0, y: height/2, z: +depth/2 }, Math.PI));
+      // left wall: x = -width/2, normal +X
+      scene.add(mkWall(wallLeft, depth, height, { x: -width/2, y: height/2, z: 0 }, Math.PI / 2));
+      // right wall: x = +width/2, normal -X
+      scene.add(mkWall(wallRight, depth, height, { x: +width/2, y: height/2, z: 0 }, -Math.PI / 2));
+
+      return { scene, width, depth, height };
+    }
+
+    // Build a "back door" — same visual style as the lobby doors, but
+    // labeled "Lobby" and not driven from project data. Positioned on
+    // the back wall of a room (z = +depth/2), facing the camera (+Z
+    // pointing toward -Z, i.e. inward). userData mirrors a normal door
+    // so HoverPicker / click handler don't need to special-case it.
+    function buildBackDoor(roomDepth, doorWoodTex) {
+      // Build a synthetic "project record" so doorLabelTexture renders
+      // something distinct for the back door.
+      const fakeProject = {
+        id: '__back__',
+        name: 'Back to Lobby',
+        status: 'shipped',
+      };
+      const door = buildDoor(fakeProject, doorWoodTex);
+      // Override label glyph color: use a neutral marker instead of
+      // shipped-green so it doesn't claim a project status.
+      // (Cheap path: just rebuild the label texture with a custom glyph.)
+      const labelCanvas = document.createElement('canvas');
+      labelCanvas.width = 1024; labelCanvas.height = 256;
+      const ctx = labelCanvas.getContext('2d');
+      const grad = ctx.createLinearGradient(0, 0, 0, 256);
+      grad.addColorStop(0, '#241710'); grad.addColorStop(1, '#0e0805');
+      ctx.fillStyle = grad; ctx.fillRect(0, 0, 1024, 256);
+      ctx.strokeStyle = '#a07a3a'; ctx.lineWidth = 6;
+      ctx.strokeRect(8, 8, 1008, 240);
+      // arrow glyph pointing left
+      ctx.strokeStyle = '#f0e6d6'; ctx.fillStyle = '#f0e6d6'; ctx.lineWidth = 5;
+      ctx.beginPath();
+      ctx.moveTo(140, 128); ctx.lineTo(70, 128);
+      ctx.moveTo(95, 100); ctx.lineTo(70, 128); ctx.lineTo(95, 156);
+      ctx.stroke();
+      ctx.font = '600 56px -apple-system, "Segoe UI", Helvetica, sans-serif';
+      ctx.textBaseline = 'middle';
+      ctx.fillText('Back to Lobby', 180, 128);
+      const newTex = new THREE.CanvasTexture(labelCanvas);
+      newTex.colorSpace = THREE.SRGBColorSpace;
+      newTex.anisotropy = 8;
+      door.userData.label.material.map = newTex;
+      door.userData.label.material.needsUpdate = true;
+
+      // Place on back wall, facing -Z (i.e. toward room center / -Z direction).
+      // Door geometry default front is +Z, and we want +Z to point at -Z world,
+      // so rotate 180 deg around Y.
+      door.position.set(0, 0, roomDepth / 2 - 0.06);
+      door.rotation.y = Math.PI;
+
+      door.userData.isBack = true;
+      // Walk-out animation goes from current camera pose to this entry pose.
+      door.userData.entryPosition = new THREE.Vector3(0, 1.6, roomDepth / 2 - 1.4);
+      door.userData.entryLookAt = new THREE.Vector3(0, 1.6, roomDepth / 2);
+
+      return door;
+    }
+
+    // ----------------------------------------------------------------
+    // ROOM_BUILDERS — registry keyed by room_type id. Each builder is
+    //   (project, roomTypeId, sharedTextures) -> { scene, width, depth,
+    //     height, backDoor, entryYaw, doors:[backDoor] }
+    // Furnished rooms register their own entries below; everything else
+    // falls back to STUB_ROOM_BUILDER.
+    // ----------------------------------------------------------------
+    const ROOM_BUILDERS = {};
+
+    // Cache of materials/textures that are safe to share across rooms.
+    function makeSharedTextures() {
+      return {
+        doorWood: woodTexture({ base: '#7a4d2c', dark: '#2a1408', stripes: 6 }),
+        lobbyFloorWood: null  // for visual continuity in stubs, reuse lobby palette
+      };
+    }
+
+    // Stub room — placeholder for any room_type that isn't furnished yet.
+    // Uses the lobby's procedural materials so it's cheap and visually
+    // recognizable as "you stepped through, but this space isn't built".
+    function STUB_ROOM_BUILDER(project, roomTypeId, shared) {
+      // procedural materials — wood floor + plaster walls + plaster ceiling
+      const floorWood = woodTexture({ base: '#4a3022', dark: '#26140a', stripes: 8 });
+      floorWood.repeat.set(2, 2);
+      const floorMat = new THREE.MeshStandardMaterial({
+        map: floorWood, color: 0x7a5238, roughness: 0.9
+      });
+      const plaster = plasterTexture({ base: '#9a826a', noise: 16 });
+      plaster.repeat.set(1.5, 1);
+      const wallMat = new THREE.MeshStandardMaterial({
+        map: plaster, color: 0x8a705a, roughness: 1.0, side: THREE.FrontSide
+      });
+      const ceilingMat = new THREE.MeshStandardMaterial({
+        color: 0x3a2818, roughness: 1.0
+      });
+
+      const shell = makeRoomShell({
+        width: 6, depth: 6, height: 3.8,
+        floorMaterial: floorMat,
+        ceilingMaterial: ceilingMat,
+        wallFront: wallMat, wallBack: wallMat,
+        wallLeft: wallMat, wallRight: wallMat,
+        fogColor: 0x1a120a, fogNear: 4, fogFar: 18
+      });
+      const scene = shell.scene;
+
+      // a warm pendant
+      const bulb = new THREE.PointLight(0xffa658, 1.6, 12, 1.7);
+      bulb.position.set(0, shell.height - 0.6, 0);
+      scene.add(bulb);
+      const bulbMesh = new THREE.Mesh(
+        new THREE.SphereGeometry(0.1, 14, 10),
+        new THREE.MeshBasicMaterial({ color: 0xffd49a })
+      );
+      bulbMesh.position.copy(bulb.position);
+      scene.add(bulbMesh);
+      scene.add(new THREE.AmbientLight(0x4a3018, 0.45));
+
+      // sign on the front wall
+      const sign = document.createElement('canvas');
+      sign.width = 1024; sign.height = 512;
+      const sctx = sign.getContext('2d');
+      sctx.fillStyle = '#1a1108'; sctx.fillRect(0, 0, 1024, 512);
+      sctx.strokeStyle = '#a07a3a'; sctx.lineWidth = 8;
+      sctx.strokeRect(16, 16, 992, 480);
+      sctx.fillStyle = '#f0e6d6';
+      sctx.textBaseline = 'middle';
+      sctx.textAlign = 'center';
+      sctx.font = '600 56px -apple-system, "Segoe UI", Helvetica, sans-serif';
+      sctx.fillText('This room is not yet built', 512, 200);
+      sctx.font = '400 44px -apple-system, "Segoe UI", Helvetica, sans-serif';
+      sctx.fillStyle = '#c7b48a';
+      sctx.fillText(`type: ${roomTypeId}`, 512, 290);
+      sctx.font = '400 28px -apple-system, "Segoe UI", Helvetica, sans-serif';
+      sctx.fillStyle = '#a08660';
+      sctx.fillText(project.name, 512, 360);
+      sctx.fillText(project.tagline || '', 512, 410);
+      const signTex = new THREE.CanvasTexture(sign);
+      signTex.colorSpace = THREE.SRGBColorSpace;
+      signTex.anisotropy = 8;
+      const signW = 3.2, signH = signW * (512/1024);
+      const signMesh = new THREE.Mesh(
+        new THREE.PlaneGeometry(signW, signH),
+        new THREE.MeshBasicMaterial({ map: signTex })
+      );
+      signMesh.position.set(0, 1.8, -shell.depth/2 + 0.02);
+      scene.add(signMesh);
+
+      // back door
+      const backDoor = buildBackDoor(shell.depth, shared.doorWood);
+      scene.add(backDoor);
+
+      return {
+        scene,
+        width: shell.width, depth: shell.depth, height: shell.height,
+        backDoor,
+        // Camera enters facing -Z (the front wall with the sign).
+        // Controller forward at yaw=0 is (sin 0, 0, -cos 0) = (0, 0, -1),
+        // i.e. -Z. So entryYaw = 0.
+        entryYaw: 0,
+        doors: [backDoor]
+      };
+    }
+
+    function buildRoomForProject(project, shared) {
+      const roomTypeId = project.room_type || assignRoom(project.id);
+      const builder = ROOM_BUILDERS[roomTypeId] || STUB_ROOM_BUILDER;
+      const built = builder(project, roomTypeId, shared);
+      built.project = project;
+      built.roomTypeId = roomTypeId;
+      return built;
+    }
+
+    // ----------------------------------------------------------------
+    // Animator — drives walk-through and reverse animations.
+    // State machine within WorkshopApp; the animator is just a tween
+    // helper that resolves a promise on completion.
+    //
+    // Walk-through timeline:
+    //   t=0..300ms       approach: camera moves from lobby-center
+    //                              toward door, looking at door
+    //   t=300..350ms     flash:    DOM #flash opacity 0->1, then scene swap
+    //   t=350..600ms     arrival:  flash 1->0, camera slides slightly
+    //                              forward into the room
+    //
+    // Reverse timeline is the mirror of the above.
+    // ----------------------------------------------------------------
+    function easeInOutCubic(t) {
+      return t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
+    }
+
+    class Animator {
+      constructor(app) {
+        this.app = app;
+        this.active = null; // { kind, startTime, resolve, ... }
+      }
+      get isActive() { return this.active !== null; }
+      walkIntoRoom(door, roomBuilt) {
+        return new Promise(resolve => {
+          this.active = {
+            kind: 'walk-in',
+            startTime: performance.now(),
+            duration: 600,
+            phases: [300, 50, 250],
+            door, roomBuilt,
+            // lobby start pose
+            fromPos: new THREE.Vector3(0, 1.65, 0),
+            // approach destination (just outside the door)
+            midPos: door.userData.entryPosition.clone(),
+            // door world position used as lookAt during approach
+            doorWorld: door.getWorldPosition(new THREE.Vector3()),
+            // room arrival pose
+            roomStartPos: new THREE.Vector3(0, 1.65, roomBuilt.depth / 2 - 0.4),
+            roomEndPos:   new THREE.Vector3(0, 1.65, roomBuilt.depth / 2 - 1.0),
+            roomLookAt:   new THREE.Vector3(0, 1.65, -roomBuilt.depth / 2 + 0.4),
+            resolve
+          };
+        });
+      }
+      walkOutToLobby(backDoor) {
+        return new Promise(resolve => {
+          this.active = {
+            kind: 'walk-out',
+            startTime: performance.now(),
+            duration: 600,
+            phases: [250, 50, 300],
+            backDoor,
+            // current camera state captured at animation start so the
+            // approach phase smoothly leaves from wherever the user was.
+            fromPos: this.app.camera.position.clone(),
+            // approach the back-door (back of the room)
+            midPos: backDoor.userData.entryPosition.clone(),
+            backWorld: backDoor.getWorldPosition(new THREE.Vector3()),
+            // lobby arrival pose — center of lobby, facing the door
+            // we just came out of in the lobby (filled in by app)
+            lobbyStartPos: new THREE.Vector3(0, 1.65, 0),
+            lobbyEndPos:   new THREE.Vector3(0, 1.65, 0),
+            lobbyLookAt:   null, // app supplies this
+            resolve
+          };
+        });
+      }
+      update() {
+        const a = this.active;
+        if (!a) return;
+        const t = performance.now() - a.startTime;
+        const [p1, p2, p3] = a.phases;
+        const flashEl = document.getElementById('flash');
+
+        if (a.kind === 'walk-in') {
+          if (t < p1) {
+            // approach phase
+            const k = easeInOutCubic(t / p1);
+            const pos = a.fromPos.clone().lerp(a.midPos, k);
+            this.app.camera.position.copy(pos);
+            this.app.camera.lookAt(a.doorWorld);
+            flashEl.style.opacity = '0';
+          } else if (t < p1 + p2) {
+            // flash phase: fade up, swap scene at midpoint
+            const phaseT = (t - p1) / p2;
+            flashEl.style.opacity = String(phaseT);
+            if (!a.swapped && phaseT >= 0.5) {
+              // swap to room scene + position camera at room start
+              this.app.swapToRoomScene(a.roomBuilt);
+              a.swapped = true;
+            }
+          } else if (t < p1 + p2 + p3) {
+            // arrival phase: fade down, slide forward into room
+            const phaseT = (t - p1 - p2) / p3;
+            flashEl.style.opacity = String(1 - phaseT);
+            const pos = a.roomStartPos.clone().lerp(a.roomEndPos, easeInOutCubic(phaseT));
+            this.app.camera.position.copy(pos);
+            this.app.camera.lookAt(a.roomLookAt);
+          } else {
+            flashEl.style.opacity = '0';
+            this.app.camera.position.copy(a.roomEndPos);
+            this.app.camera.lookAt(a.roomLookAt);
+            // Hand control back to the controller, aligned with the
+            // room's entry yaw.
+            this.app.controller.setHeading(a.roomBuilt.entryYaw || 0);
+            this.app.controller.enabled = true;
+            this.active = null;
+            a.resolve();
+          }
+        } else if (a.kind === 'walk-out') {
+          // p1 = approach to back door (250)
+          // p2 = flash (50)
+          // p3 = arrival in lobby (300)
+          if (t < p1) {
+            const k = easeInOutCubic(t / p1);
+            const pos = a.fromPos.clone().lerp(a.midPos, k);
+            this.app.camera.position.copy(pos);
+            this.app.camera.lookAt(a.backWorld);
+            flashEl.style.opacity = '0';
+          } else if (t < p1 + p2) {
+            const phaseT = (t - p1) / p2;
+            flashEl.style.opacity = String(phaseT);
+            if (!a.swapped && phaseT >= 0.5) {
+              this.app.swapToLobbyScene();
+              a.swapped = true;
+            }
+          } else if (t < p1 + p2 + p3) {
+            const phaseT = (t - p1 - p2) / p3;
+            flashEl.style.opacity = String(1 - phaseT);
+            const pos = a.lobbyStartPos.clone().lerp(a.lobbyEndPos, easeInOutCubic(phaseT));
+            this.app.camera.position.copy(pos);
+            if (a.lobbyLookAt) this.app.camera.lookAt(a.lobbyLookAt);
+          } else {
+            flashEl.style.opacity = '0';
+            this.app.camera.position.copy(a.lobbyEndPos);
+            // Restore controller heading to face the lobby door the
+            // user just exited (so spatial continuity is preserved).
+            if (a.lobbyLookAt) {
+              const dx = a.lobbyLookAt.x - a.lobbyEndPos.x;
+              const dz = a.lobbyLookAt.z - a.lobbyEndPos.z;
+              const yaw = Math.atan2(dx, -dz);
+              this.app.controller.setHeading(yaw);
+            }
+            this.app.controller.enabled = true;
+            this.active = null;
+            a.resolve();
+          }
+        }
+      }
+    }
+
+    // ----------------------------------------------------------------
+    // WorkshopApp — boots Three.js, builds the lobby, drives the loop,
+    // handles walk-through animations and back-to-lobby returns.
     // ----------------------------------------------------------------
     class WorkshopApp {
       constructor(canvas, projectsData) {
@@ -1412,10 +1802,12 @@ Out of scope for v1 (deferred)
         window.addEventListener('resize', () => this._resize());
 
         this.camera = new THREE.PerspectiveCamera(72, window.innerWidth / window.innerHeight, 0.05, 80);
-        this.camera.position.set(0, 1.65, 0); // eye height in the lobby
+        this.camera.position.set(0, 1.65, 0);
 
         this.controller = new CameraController(this.camera, canvas);
         this.picker = new HoverPicker(this.camera, canvas);
+
+        this.shared = makeSharedTextures();
 
         const built = buildLobby(this.projectsData);
         this.lobbyScene = built.scene;
@@ -1423,29 +1815,107 @@ Out of scope for v1 (deferred)
         this.activeScene = this.lobbyScene;
         this.picker.setTargets(this.lobbyDoors);
 
+        // State machine: 'lobby' | 'walking-in' | 'in-room' | 'walking-out'
+        this.mode = 'lobby';
+        // Built rooms are cached so re-entering doesn't rebuild.
+        this.roomCache = new Map();
+        this.currentRoom = null;
+        // Record of which lobby door the user took, so on return the
+        // controller's heading restores facing that door (spatial
+        // continuity per spec).
+        this.returnDoorWorld = null;
+
+        this.animator = new Animator(this);
+
         // Initial heading: face the app cluster (centered on 0 deg).
-        // Door angle 0 maps to world +X (cos(0), sin(0)) -> (1, 0).
-        // CameraController's forward at yaw is (sin yaw, 0, -cos yaw),
-        // so yaw = +90 deg points the camera at +X, i.e. straight at
-        // the app cluster center.
         this.controller.setHeading(THREE.MathUtils.degToRad(90));
 
-        canvas.addEventListener('click', (e) => {
-          if (this.picker.hovered) {
-            const project = this.picker.hovered.userData.project;
-            this._onDoorClicked(project, this.picker.hovered);
+        this._onClick = (e) => {
+          if (this.animator.isActive) return;
+          const hov = this.picker.hovered;
+          if (!hov) return;
+          if (hov.userData.isBack) {
+            this._returnToLobby();
+          } else {
+            this._enterDoor(hov);
           }
-        });
+        };
+        canvas.addEventListener('click', this._onClick);
+
+        this._onKey = (e) => {
+          if (e.key === 'Escape' && this.mode === 'in-room' && !this.animator.isActive) {
+            this._returnToLobby();
+          }
+        };
+        window.addEventListener('keydown', this._onKey);
 
         this.clock = new THREE.Clock();
         this._loop = this._loop.bind(this);
         requestAnimationFrame(this._loop);
       }
-      _onDoorClicked(project, doorGroup) {
-        // Walk-through animation lands in the next commit; for now,
-        // just visually flash + log so the lobby commit is fully
-        // useful on its own.
-        console.log('[door click]', project.id, '->', assignRoom(project.id));
+      _enterDoor(doorGroup) {
+        const project = doorGroup.userData.project;
+        const roomTypeId = project.room_type || assignRoom(project.id);
+        let built = this.roomCache.get(project.id);
+        if (!built) {
+          built = buildRoomForProject(project, this.shared);
+          this.roomCache.set(project.id, built);
+        }
+        this.currentRoom = built;
+        this.returnDoorWorld = doorGroup.getWorldPosition(new THREE.Vector3());
+
+        // Hand off control to the animator.
+        this.controller.enabled = false;
+        this.mode = 'walking-in';
+        this.picker.setTargets([]);
+
+        // Update overlay text.
+        document.getElementById('subtitle').textContent =
+          project.name + (ROOM_BUILDERS[roomTypeId] ? '' : ' (stub room)');
+        document.getElementById('hint').classList.add('hidden');
+        document.getElementById('back-hint').classList.remove('hidden');
+
+        this.animator.walkIntoRoom(doorGroup, built).then(() => {
+          this.mode = 'in-room';
+          this.picker.setTargets(built.doors);
+        });
+      }
+      _returnToLobby() {
+        if (!this.currentRoom) return;
+        this.controller.enabled = false;
+        this.mode = 'walking-out';
+        this.picker.setTargets([]);
+
+        const anim = this.animator.walkOutToLobby(this.currentRoom.backDoor);
+        // Supply lobby start/end + look-at so the camera arrives at
+        // the lobby center facing the door it came out of (symmetric
+        // to the walk-in: the room ends with a forward-slide, the
+        // lobby starts with a step-back from that door).
+        const a = this.animator.active;
+        if (a && this.returnDoorWorld) {
+          const ret = this.returnDoorWorld;
+          a.lobbyStartPos = new THREE.Vector3(ret.x * 0.55, 1.65, ret.z * 0.55);
+          a.lobbyEndPos   = new THREE.Vector3(0, 1.65, 0);
+          a.lobbyLookAt   = ret.clone();
+        }
+
+        document.getElementById('subtitle').textContent = 'Lobby';
+        document.getElementById('back-hint').classList.add('hidden');
+        document.getElementById('hint').classList.remove('hidden');
+        document.getElementById('hint').classList.remove('dim');
+        setTimeout(() => document.getElementById('hint').classList.add('dim'), 4500);
+
+        anim.then(() => {
+          this.mode = 'lobby';
+          this.currentRoom = null;
+          this.picker.setTargets(this.lobbyDoors);
+        });
+      }
+      swapToRoomScene(roomBuilt) {
+        this.activeScene = roomBuilt.scene;
+      }
+      swapToLobbyScene() {
+        this.activeScene = this.lobbyScene;
       }
       _resize() {
         const w = window.innerWidth, h = window.innerHeight;
@@ -1458,7 +1928,11 @@ Out of scope for v1 (deferred)
       }
       _loop() {
         const dt = Math.min(0.05, this.clock.getDelta());
-        this.controller.update(dt);
+        if (this.animator.isActive) {
+          this.animator.update();
+        } else {
+          this.controller.update(dt);
+        }
         this.picker.update();
         this.renderer.render(this.activeScene, this.camera);
         requestAnimationFrame(this._loop);
