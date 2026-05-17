@@ -2849,6 +2849,190 @@ Out of scope for v1 (deferred)
     ROOM_BUILDERS['cnc-mill-cell'] = buildCncMillCell;
 
     // ----------------------------------------------------------------
+    // FURNISHED: dye-vat-room
+    //   game-shelf + command-center -> steaming dye vats, hanging cloth,
+    //   bamboo poles, tile floor, white plaster, copper vats. Diffuse
+    //   window. Dye-stained board (using tapestry theme).
+    // ----------------------------------------------------------------
+    function buildDyeVatRoom(project, roomTypeId, shared) {
+      const tile = tileTexture({ a: '#d8d2c4', b: '#a8a094', grout: '#5a564a' });
+      tile.repeat.set(2, 2);
+      const floorMat = new THREE.MeshStandardMaterial({
+        map: tile, color: 0xd0c8b4, roughness: 0.6
+      });
+      const plaster = plasterTexture({ base: '#e8e2d0', noise: 8 });
+      plaster.repeat.set(2, 1.2);
+      const wallMat = new THREE.MeshStandardMaterial({
+        map: plaster, color: 0xe0d8c0, roughness: 1.0,
+        emissive: 0x4a4030, emissiveIntensity: 0.25
+      });
+      const ceilingMat = new THREE.MeshStandardMaterial({
+        color: 0xf0e8d4, roughness: 1.0, emissive: 0xa08c70, emissiveIntensity: 0.55
+      });
+
+      const shell = makeRoomShell({
+        width: 7.0, depth: 6.5, height: 4.2,
+        floorMaterial: floorMat, ceilingMaterial: ceilingMat,
+        wallFront: wallMat, wallBack: wallMat, wallLeft: wallMat, wallRight: wallMat,
+        fogColor: 0xd8ccb0, fogNear: 6, fogFar: 24
+      });
+      const scene = shell.scene;
+      const W = shell.width, D = shell.depth, H = shell.height;
+
+      // diffuse window light + ambient — feels like a sun-soaked atelier
+      scene.add(new THREE.HemisphereLight(0xfff4e0, 0x6a5840, 1.0));
+      scene.add(new THREE.AmbientLight(0xfff0d8, 0.55));
+      const window1 = new THREE.DirectionalLight(0xfff4d0, 0.8);
+      window1.position.set(-3, 4, 2);
+      scene.add(window1);
+
+      // three copper dye vats with brightly colored dye baths
+      const copper = new THREE.MeshStandardMaterial({
+        color: 0xc06a30, roughness: 0.35, metalness: 0.9
+      });
+      const copperDark = new THREE.MeshStandardMaterial({
+        color: 0x6a3818, roughness: 0.5, metalness: 0.85
+      });
+      const dyes = [
+        { liquid: 0x8a2868, glow: 0x4a1030 },   // magenta
+        { liquid: 0x4030a8, glow: 0x1a1050 },   // indigo
+        { liquid: 0xd8a020, glow: 0x6a4810 }    // saffron yellow
+      ];
+      for (let i = 0; i < 3; i++) {
+        const x = -2.2 + i * 2.2;
+        const z = -0.4;
+        // base ring
+        const base = new THREE.Mesh(
+          new THREE.CylinderGeometry(0.62, 0.66, 0.12, 20),
+          copperDark
+        );
+        base.position.set(x, 0.06, z);
+        scene.add(base);
+        // vat body
+        const body = new THREE.Mesh(
+          new THREE.CylinderGeometry(0.6, 0.55, 0.95, 24),
+          copper
+        );
+        body.position.set(x, 0.6, z);
+        scene.add(body);
+        // liquid surface
+        const dye = dyes[i];
+        const liquid = new THREE.Mesh(
+          new THREE.CircleGeometry(0.55, 24),
+          new THREE.MeshStandardMaterial({
+            color: dye.liquid, roughness: 0.25, metalness: 0.1,
+            emissive: dye.glow, emissiveIntensity: 0.5
+          })
+        );
+        liquid.rotation.x = -Math.PI / 2;
+        liquid.position.set(x, 1.05, z);
+        scene.add(liquid);
+        // a small point light tinted by the dye color (bouncing off the rim)
+        const tintLight = new THREE.PointLight(dye.liquid, 0.7, 3, 1.8);
+        tintLight.position.set(x, 1.3, z);
+        scene.add(tintLight);
+        // steam puffs above
+        const steamMat = new THREE.MeshBasicMaterial({
+          color: 0xffffff, transparent: true, opacity: 0.18
+        });
+        for (let s = 0; s < 3; s++) {
+          const puff = new THREE.Mesh(
+            new THREE.SphereGeometry(0.18 + Math.random() * 0.1, 10, 8),
+            steamMat
+          );
+          puff.position.set(x + (Math.random() - 0.5) * 0.3, 1.4 + s * 0.35 + Math.random() * 0.1, z + (Math.random() - 0.5) * 0.3);
+          scene.add(puff);
+        }
+      }
+
+      // horizontal bamboo poles spanning the room high up, with cloth draped over them
+      const bamboo = new THREE.MeshStandardMaterial({
+        color: 0xc8a868, roughness: 0.85, metalness: 0.0,
+        emissive: 0x3a3018, emissiveIntensity: 0.1
+      });
+      const poleZs = [-D/2 + 1.6, -D/2 + 2.6];
+      const clothColors = [0x6a2858, 0x3848a8, 0xc88840, 0xa05060, 0x489088];
+      for (let p = 0; p < poleZs.length; p++) {
+        const pole = new THREE.Mesh(
+          new THREE.CylinderGeometry(0.04, 0.04, W - 0.6, 8),
+          bamboo
+        );
+        pole.rotation.z = Math.PI / 2;
+        pole.position.set(0, H - 0.9 - p * 0.2, poleZs[p]);
+        scene.add(pole);
+        // hang cloth panels off the pole
+        const panels = 4;
+        for (let i = 0; i < panels; i++) {
+          const t = (i + 0.5) / panels;
+          const cx = (t - 0.5) * (W - 1.0);
+          const c = clothColors[(i + p) % clothColors.length];
+          const cloth = new THREE.Mesh(
+            new THREE.PlaneGeometry(0.7, 1.2),
+            new THREE.MeshStandardMaterial({
+              color: c, roughness: 0.95, side: THREE.DoubleSide,
+              emissive: c, emissiveIntensity: 0.08
+            })
+          );
+          cloth.position.set(cx, H - 0.9 - p * 0.2 - 0.6, poleZs[p] + (p === 0 ? 0.02 : -0.02));
+          // slight tilt for "drape"
+          cloth.rotation.z = (Math.random() - 0.5) * 0.2;
+          scene.add(cloth);
+        }
+      }
+
+      // a wooden stirring paddle leaning against the front wall
+      const paddleMat = new THREE.MeshStandardMaterial({ color: 0x6a4622, roughness: 0.9 });
+      const paddleHandle = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.025, 0.025, 1.6, 10),
+        paddleMat
+      );
+      paddleHandle.position.set(W/2 - 0.4, 0.9, -D/2 + 0.6);
+      paddleHandle.rotation.z = -Math.PI / 12;
+      scene.add(paddleHandle);
+      const paddleBlade = new THREE.Mesh(
+        new THREE.BoxGeometry(0.12, 0.32, 0.02),
+        paddleMat
+      );
+      paddleBlade.position.set(W/2 - 0.4 + 0.18, 0.18, -D/2 + 0.6);
+      paddleBlade.rotation.z = -Math.PI / 12;
+      scene.add(paddleBlade);
+
+      // whiteboard with tapestry theme + extra dye-splatter spots
+      // overlaid as small emissive discs on the frame for "dye-stained"
+      const wb = makePlaceholderWhiteboard({
+        width: 2.8, height: 1.7,
+        color: 0xe8d4a8, emissive: 0x4a3018, frameColor: 0x3a1a14
+      });
+      wb.position.set(0, 1.8, -D/2 + 0.04);
+      wb.userData.boardKind = 'tapestry';
+      // a few colored "splats" on the dark frame
+      const splatCols = [0x8a2868, 0x4030a8, 0xd8a020, 0x489088];
+      for (let i = 0; i < 8; i++) {
+        const sx = (Math.random() - 0.5) * 3.0;
+        const sy = (Math.random() < 0.5 ? -1 : 1) * (0.85 + Math.random() * 0.1);
+        const col = splatCols[i % splatCols.length];
+        const splat = new THREE.Mesh(
+          new THREE.CircleGeometry(0.05 + Math.random() * 0.04, 14),
+          new THREE.MeshBasicMaterial({ color: col })
+        );
+        splat.position.set(sx, sy, 0.03);
+        wb.add(splat);
+      }
+      scene.add(wb);
+
+      const backDoor = buildBackDoor(D, shared.doorWood);
+      scene.add(backDoor);
+
+      return {
+        scene, width: W, depth: D, height: H,
+        backDoor, whiteboard: wb,
+        entryYaw: 0,
+        doors: [backDoor]
+      };
+    }
+    ROOM_BUILDERS['dye-vat-room'] = buildDyeVatRoom;
+
+    // ----------------------------------------------------------------
     // Whiteboard data rendering. Each furnished room declares a
     // boardKind (etched-glass / chalkboard / iron-framed-slate / ...);
     // we render the project record to a 2048x1280 canvas styled to
