@@ -2651,6 +2651,204 @@ Out of scope for v1 (deferred)
     ROOM_BUILDERS['ceramics-studio'] = buildCeramicsStudio;
 
     // ----------------------------------------------------------------
+    // FURNISHED: cnc-mill-cell
+    //   homelab-tls-edge -> polished concrete floor, painted machine
+    //   green CNC enclosure, fluorescent + enclosure light, control
+    //   pendant on arm. Steel-sheet whiteboard.
+    // ----------------------------------------------------------------
+    function buildCncMillCell(project, roomTypeId, shared) {
+      const polishedConcrete = plasterTexture({ base: '#6a6e72', noise: 10 });
+      polishedConcrete.repeat.set(2.5, 2.5);
+      const floorMat = new THREE.MeshStandardMaterial({
+        map: polishedConcrete, color: 0x707478, roughness: 0.35, metalness: 0.1
+      });
+      const wallPaint = new THREE.MeshStandardMaterial({
+        color: 0x9ca0a4, roughness: 0.7, metalness: 0.05,
+        emissive: 0x202428, emissiveIntensity: 0.25
+      });
+      const ceilingMat = new THREE.MeshStandardMaterial({
+        color: 0xe0e4e8, roughness: 0.95,
+        emissive: 0xa0c0d0, emissiveIntensity: 0.6
+      });
+
+      const shell = makeRoomShell({
+        width: 7.0, depth: 6.5, height: 4.0,
+        floorMaterial: floorMat, ceilingMaterial: ceilingMat,
+        wallFront: wallPaint, wallBack: wallPaint,
+        wallLeft: wallPaint, wallRight: wallPaint,
+        fogColor: 0x6a7078, fogNear: 6, fogFar: 22
+      });
+      const scene = shell.scene;
+      const W = shell.width, D = shell.depth, H = shell.height;
+
+      // cool fluorescent overhead + slightly cool ambient
+      scene.add(new THREE.AmbientLight(0xc8d4e0, 0.75));
+      scene.add(new THREE.HemisphereLight(0xe0f0ff, 0x303a48, 0.65));
+      const fluo1 = new THREE.RectAreaLight(0xffffff, 6, 2.0, 0.4);
+      fluo1.position.set(-1.5, H - 0.1, 0);
+      fluo1.rotation.x = -Math.PI / 2;
+      scene.add(fluo1);
+      const fluo2 = fluo1.clone();
+      fluo2.position.set(1.5, H - 0.1, 0);
+      scene.add(fluo2);
+      // visible fluorescent housings
+      const fluoMat = new THREE.MeshBasicMaterial({ color: 0xeef4ff });
+      for (const x of [-1.5, 1.5]) {
+        const housing = new THREE.Mesh(new THREE.BoxGeometry(2.0, 0.06, 0.4), fluoMat);
+        housing.position.set(x, H - 0.08, 0);
+        scene.add(housing);
+      }
+
+      // ------- CNC mill enclosure (the centerpiece) -------
+      const machineGreen = new THREE.MeshStandardMaterial({
+        color: 0x4a6850, roughness: 0.55, metalness: 0.4
+      });
+      const machineDark = new THREE.MeshStandardMaterial({
+        color: 0x202824, roughness: 0.7, metalness: 0.5
+      });
+      const glassMat = new THREE.MeshStandardMaterial({
+        color: 0x18302a, roughness: 0.15, metalness: 0.2,
+        emissive: 0x4a8060, emissiveIntensity: 0.35,
+        transparent: true, opacity: 0.7
+      });
+
+      const millGroup = new THREE.Group();
+      millGroup.position.set(0, 0, 0.5);
+      // base
+      const millBase = new THREE.Mesh(new THREE.BoxGeometry(2.4, 0.5, 1.6), machineDark);
+      millBase.position.set(0, 0.25, 0);
+      millGroup.add(millBase);
+      // main body
+      const millBody = new THREE.Mesh(new THREE.BoxGeometry(2.4, 1.8, 1.6), machineGreen);
+      millBody.position.set(0, 1.4, 0);
+      millGroup.add(millBody);
+      // tinted window on the front
+      const window1 = new THREE.Mesh(new THREE.BoxGeometry(1.6, 1.1, 0.02), glassMat);
+      window1.position.set(0, 1.55, 0.81);
+      millGroup.add(window1);
+      // little glow from inside
+      const insideGlow = new THREE.PointLight(0xb0e0d0, 1.2, 3, 1.5);
+      insideGlow.position.set(0, 1.4, 0.5);
+      millGroup.add(insideGlow);
+      // hint of the cutter inside (a vertical post + spindle)
+      const post = new THREE.Mesh(new THREE.BoxGeometry(0.12, 1.0, 0.12), machineDark);
+      post.position.set(0, 1.9, 0.3);
+      millGroup.add(post);
+      const spindle = new THREE.Mesh(new THREE.CylinderGeometry(0.08, 0.05, 0.4, 12), new THREE.MeshStandardMaterial({ color: 0xb8bcc0, roughness: 0.4, metalness: 0.8 }));
+      spindle.position.set(0, 1.4, 0.3);
+      millGroup.add(spindle);
+      // top hood
+      const millTop = new THREE.Mesh(new THREE.BoxGeometry(2.4, 0.3, 1.6), machineDark);
+      millTop.position.set(0, 2.45, 0);
+      millGroup.add(millTop);
+      // label strip
+      const labelMat = new THREE.MeshBasicMaterial({ color: 0xeaeaea });
+      const labelStrip = new THREE.Mesh(new THREE.BoxGeometry(0.6, 0.15, 0.02), labelMat);
+      labelStrip.position.set(0, 2.18, 0.82);
+      millGroup.add(labelStrip);
+      scene.add(millGroup);
+
+      // ------- control pendant on swing arm -------
+      const armMat = new THREE.MeshStandardMaterial({ color: 0x202428, roughness: 0.6, metalness: 0.7 });
+      const arm1 = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.06, 0.9), armMat);
+      arm1.position.set(1.2, 2.0, 0.65);
+      arm1.rotation.y = -Math.PI / 4;
+      scene.add(arm1);
+      const pendant = new THREE.Mesh(new THREE.BoxGeometry(0.35, 0.55, 0.1), armMat);
+      pendant.position.set(1.7, 1.7, 1.05);
+      pendant.rotation.y = -Math.PI / 6;
+      scene.add(pendant);
+      const pendantScreen = new THREE.Mesh(
+        new THREE.PlaneGeometry(0.28, 0.2),
+        new THREE.MeshBasicMaterial({ color: 0x4ae098 })
+      );
+      pendantScreen.position.set(1.74, 1.78, 1.10);
+      pendantScreen.rotation.y = -Math.PI / 6;
+      scene.add(pendantScreen);
+
+      // chip pan with swarf (curled metal shavings)
+      const chipPan = new THREE.Mesh(
+        new THREE.BoxGeometry(1.4, 0.06, 0.8),
+        new THREE.MeshStandardMaterial({ color: 0x16181c, roughness: 0.7, metalness: 0.6 })
+      );
+      chipPan.position.set(0, 0.05, 1.6);
+      scene.add(chipPan);
+      const swarfMat = new THREE.MeshStandardMaterial({ color: 0x9ca0a8, roughness: 0.45, metalness: 0.85 });
+      for (let i = 0; i < 14; i++) {
+        const sw = new THREE.Mesh(
+          new THREE.TorusGeometry(0.04 + Math.random() * 0.04, 0.012, 6, 14, Math.PI),
+          swarfMat
+        );
+        sw.position.set(-0.5 + Math.random(), 0.1, 1.3 + Math.random() * 0.6);
+        sw.rotation.set(Math.random() * Math.PI, Math.random() * Math.PI, Math.random() * Math.PI);
+        scene.add(sw);
+      }
+
+      // coolant puddle (subtle teal reflective patch)
+      const coolant = new THREE.Mesh(
+        new THREE.CircleGeometry(0.45, 24),
+        new THREE.MeshStandardMaterial({ color: 0x2a5048, roughness: 0.1, metalness: 0.6, emissive: 0x0a2a20, emissiveIntensity: 0.3 })
+      );
+      coolant.rotation.x = -Math.PI / 2;
+      coolant.position.set(-1.6, 0.005, 1.4);
+      scene.add(coolant);
+
+      // tool cart against the right wall — drawers
+      const cartMat = new THREE.MeshStandardMaterial({ color: 0x9c2a22, roughness: 0.55, metalness: 0.4 });
+      const cartBody = new THREE.Mesh(new THREE.BoxGeometry(0.7, 1.1, 0.5), cartMat);
+      cartBody.position.set(W/2 - 0.45, 0.55, -1.4);
+      scene.add(cartBody);
+      // drawer faces
+      const drawerMat = new THREE.MeshStandardMaterial({ color: 0x7a1612, roughness: 0.5, metalness: 0.5 });
+      for (let i = 0; i < 4; i++) {
+        const d = new THREE.Mesh(new THREE.BoxGeometry(0.66, 0.22, 0.02), drawerMat);
+        d.position.set(W/2 - 0.45, 0.18 + i * 0.26, -1.4 + 0.26);
+        scene.add(d);
+        // pull
+        const pull = new THREE.Mesh(new THREE.BoxGeometry(0.18, 0.02, 0.03), new THREE.MeshStandardMaterial({ color: 0xc0c4c8, roughness: 0.3, metalness: 0.85 }));
+        pull.position.set(W/2 - 0.45, 0.18 + i * 0.26, -1.4 + 0.275);
+        scene.add(pull);
+      }
+      // top of cart with a couple of tools — calipers + endmill
+      const caliper = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.02, 0.06), new THREE.MeshStandardMaterial({ color: 0xb8c0c8, roughness: 0.35, metalness: 0.8 }));
+      caliper.position.set(W/2 - 0.45, 1.13, -1.4);
+      scene.add(caliper);
+      const endmill = new THREE.Mesh(new THREE.CylinderGeometry(0.025, 0.025, 0.18, 12), new THREE.MeshStandardMaterial({ color: 0xd0d4d8, roughness: 0.4, metalness: 0.9 }));
+      endmill.position.set(W/2 - 0.55, 1.22, -1.5);
+      endmill.rotation.z = Math.PI / 2;
+      scene.add(endmill);
+
+      // steel-sheet whiteboard mounted on the front wall (left of the mill)
+      const wb = makePlaceholderWhiteboard({
+        width: 2.6, height: 1.7,
+        color: 0xc0c5c8, emissive: 0x303840, frameColor: 0x1a1d20
+      });
+      wb.position.set(-W/2 + 1.6, 1.85, -D/2 + 0.04);
+      wb.userData.boardKind = 'steel-sheet';
+      // add rivet-like studs at each corner of the frame
+      const stud = new THREE.MeshStandardMaterial({ color: 0x9ea4a8, roughness: 0.4, metalness: 0.7 });
+      for (const sx of [-1.3, 1.3]) {
+        for (const sy of [-0.85, 0.85]) {
+          const s = new THREE.Mesh(new THREE.SphereGeometry(0.035, 12, 8), stud);
+          s.position.set(sx, sy, 0.03);
+          wb.add(s);
+        }
+      }
+      scene.add(wb);
+
+      const backDoor = buildBackDoor(D, shared.doorWood);
+      scene.add(backDoor);
+
+      return {
+        scene, width: W, depth: D, height: H,
+        backDoor, whiteboard: wb,
+        entryYaw: 0,
+        doors: [backDoor]
+      };
+    }
+    ROOM_BUILDERS['cnc-mill-cell'] = buildCncMillCell;
+
+    // ----------------------------------------------------------------
     // Whiteboard data rendering. Each furnished room declares a
     // boardKind (etched-glass / chalkboard / iron-framed-slate / ...);
     // we render the project record to a 2048x1280 canvas styled to
