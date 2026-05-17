@@ -441,20 +441,21 @@
       "status": "active",
       "tagline": "Visual project anchor — workshop-station cognitive accommodation.",
       "description": "Cognitive accommodation for Karl's station-based mental model: visual and physical separation between projects so his mind can switch gears. Floor plan (active projects with numbered stations) + Annex (proposed projects). Workshop layout decided — actual floor plan with doors/rooms preferred over card-based dashboard. Currently in panorama-redesign phase per Karl's request for Zillow-style virtual tour interface.",
-      "current_state": "v0 workshop layout shipped 2026-05-16 morning. Reconciliation against GitHub MCP completed 2026-05-16 afternoon. Panorama redesign decisions pending Karl's answers on technical approach + textures + sequencing.",
+      "current_state": "Panorama prototype shipped (PR #1) and rounded out with all 14 furnished rooms (PR #2). Deployed 2026-05-17 to a LAN-only LXC at workshop.ferrumcorde.com (10.100.23.86 behind the Caddy edge at 10.100.23.71). Auto-pulls main every 5 min via systemd timer.",
       "repo": "github.com/kraulerson/the_workshop",
       "repo_verified": true,
       "repo_visibility": "private",
       "action_items": [
-        "Resolve panorama redesign technical decisions (DONE — Three.js + hybrid textures + 50 rooms catalog)",
-        "Build panorama prototype",
-        "After validation: build bridge endpoint for command_center_read + command_center_update",
-        "Deploy to Cloudflare Pages at subdomain of ferrumcorde.com"
+        "Build bridge endpoint for command_center_read + command_center_update so the whiteboards reflect live writes",
+        "Karl's first real tour: validate that the cognitive accommodation lands"
       ],
       "action_log": [
         { "date": "2026-05-16", "content": "Repo created at github.com/kraulerson/the_workshop. Scaffolding committed: README, LICENSE, .gitignore, data/projects.json, docs/adr/0001-design-decisions.md, docs/room-catalog.md." },
         { "date": "2026-05-16", "content": "Reconciliation against GitHub MCP completed — 12 repos verified, multiple stale/wrong entries corrected. alden-bridge-mcp + alden-qdrant merged into single Alden Stack station. Karlban + homelab-tls-edge added. Tender Reminders corrected from React Native to KMP+Swift." },
-        { "date": "2026-05-16", "content": "v0 workshop layout (floor plan + station views + annex) shipped. Cognitive accommodation reframe established." }
+        { "date": "2026-05-16", "content": "v0 workshop layout (floor plan + station views + annex) shipped. Cognitive accommodation reframe established." },
+        { "date": "2026-05-16", "content": "PR #1 shipped — panorama prototype v1: lobby + 14 doors + 3 furnished rooms (photography-darkroom, greenhouse, blacksmith-forge) + 11 stubs." },
+        { "date": "2026-05-16", "content": "PR #2 shipped — remaining 9 rooms furnished (brewery, ceramics-studio, cnc-mill-cell, dye-vat-room, foundry, glassblowing-studio, radio-station, textile-loom-room, watchmaker-bench). Click-drag-only camera (passive mouse-follow removed)." },
+        { "date": "2026-05-17", "content": "LAN deployment: LXC 124 (workshop, 10.100.23.86) created on Proxmox ferrumcorde, Debian 13 + nginx + 5-min systemd git-pull timer. Caddy edge gets a workshop.ferrumcorde.com reverse_proxy block; per-host A records added on both Pi-holes (.41, .42); Cloudflare A workshop.ferrumcorde.com -> 0.0.0.0 DNS-only. End-to-end HTTPS verified." }
       ],
       "milestones": [
         { "label": "Initial project inventory built", "done": true },
@@ -463,9 +464,10 @@
         { "label": "Panorama redesign decisions resolved", "done": true },
         { "label": "Repo created (the_workshop, private)", "done": true },
         { "label": "Scaffolding committed", "done": true },
-        { "label": "Panorama prototype built", "done": false },
-        { "label": "Bridge writer endpoint", "done": false },
-        { "label": "Cloudflare Pages deployment", "done": false }
+        { "label": "Panorama prototype built", "done": true },
+        { "label": "All 14 rooms furnished (no stubs)", "done": true },
+        { "label": "LAN deployment to workshop.ferrumcorde.com", "done": true },
+        { "label": "Bridge writer endpoint", "done": false }
       ],
       "open_items": [],
       "depends_on": ["alden-stack"],
