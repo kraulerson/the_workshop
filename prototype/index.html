@@ -1,0 +1,117 @@
+<!doctype html>
+<!--
+The Workshop — Panorama Prototype v1
+====================================
+
+Cognitive-accommodation dashboard. A 360° lobby with doors leading to
+project rooms, rendered with Three.js. The metaphor is load-bearing:
+spatial separation gives Karl's mind an anchor point per project so
+context-switching has recall.
+
+See:
+- docs/adr/0001-design-decisions.md  — seven design decisions, "cognitive accommodation" reframe
+- docs/room-catalog.md               — 50 room type specs + FNV-1a assignment algorithm
+- data/projects.json                 — verified-as-of-2026-05-16 project inventory
+
+----------------------------------------------------------------------
+PLAN
+----------------------------------------------------------------------
+
+Scene structure
+---------------
+Single Three.js WebGLRenderer + PerspectiveCamera at fixed center.
+Two top-level scenes managed by a SceneManager:
+
+  - lobby     — built once on init. 14 doors arranged in a circle by
+                domain cluster. Wood floor, brick walls, exposed beams,
+                warm pendant lighting.
+  - room      — lazily built on door click. Each room is its own
+                THREE.Scene constructed by a builder registered in
+                ROOM_BUILDERS keyed by room_type id. Unknown ids fall
+                back to STUB_ROOM_BUILDER.
+
+Camera sits at origin in every scene. The user only rotates the camera;
+they do not translate. Walk-through animation is the only thing that
+moves the camera.
+
+Door arrangement (stable, deterministic)
+----------------------------------------
+14 floor-station projects (status ∈ {shipped, active, blocked}) — the
+4 annex projects (status ∈ {scoped, planned}) are skipped in v1.
+
+Sorted by domain then alphabetically within domain. Domains placed in
+fixed angular ranges so the cluster geometry is permanent across
+sessions:
+
+  framework        →  angles around 270° (left of forward)
+  app              →  angles around 0°   (forward, biggest cluster)
+  mcp              →  angles around 90°  (right)
+  infrastructure   →  angles around 180° (behind)
+
+Doors within a cluster are spread evenly across that cluster's arc.
+Initial camera heading is 0° (looking at the app cluster) so something
+substantial is visible on first render.
+
+Status shape next to label (colorblind-safe per Karl's requirement):
+  shipped = circle, active = square, blocked = triangle.
+
+Room assignment (FNV-1a 32-bit, mod 50)
+---------------------------------------
+  hash(projectId) % 50  →  index into the 50-room catalog.
+
+Computed at runtime for any project without an explicit `room_type`.
+Verified mapping for current floor projects (2026-05-16 data):
+
+  solo-orchestrator       → photography-darkroom    ★ FURNISHED
+  claude-dev-framework    → greenhouse              ★ FURNISHED
+  alden-stack             → blacksmith-forge        ★ FURNISHED
+  game-shelf              → dye-vat-room            stub
+  k-pdf                   → glassblowing-studio     stub
+  karlban                 → textile-loom-room       stub
+  lancache-orchestrator   → foundry                 stub
+  meshscope               → radio-station           stub
+  reminder-app            → watchmaker-bench        stub
+  command-center          → dye-vat-room            stub (shares w/ game-shelf)
+  memoryco-collab         → ceramics-studio         stub
+  ferrum-corde-llc        → textile-loom-room       stub (shares w/ karlban)
+  homelab-core            → brewery                 stub
+  homelab-tls-edge        → cnc-mill-cell           stub
+
+Furnished room rationale: three flagship projects (solo-orchestrator,
+claude-dev-framework, alden-stack) plus maximum visual variety —
+red-lit dark + bright airy daylight + warm forge orange.
+
+Data loading strategy (both, per spec)
+--------------------------------------
+1. Embedded JSON in a <script type="application/json"> block — the
+   canonical source bundled at build time so file:// works.
+2. On startup, try fetch('../data/projects.json'). If it succeeds
+   (HTTP served) use the live data; otherwise fall back to embedded.
+
+Interaction model
+-----------------
+  - Mouse-move pan (middle third of viewport): passive rotation
+  - Click-drag: high-gain rotation, drag-distance maps to angle
+  - Hover door: glow + scale-up, cursor → pointer
+  - Click door: 600ms walk-through (approach 300 / flash 50 / arrival 250)
+  - Inside a room: same pan controls + "back to lobby" door behind user
+  - Escape: any time inside a room, return to lobby
+
+Out of scope for v1 (deferred)
+------------------------------
+  - 47 of the 50 room types furnished (3 furnished + 11 unique stubs)
+  - Annex view for scoped/planned projects
+  - Editing whiteboard data inside the dashboard
+  - Multi-floor / multi-building layouts
+  - Touch / mobile support
+  - LOD, instancing, compressed textures, persistent camera state
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>The Workshop — Panorama Prototype</title>
+</head>
+<body>
+<!-- Implementation lands in subsequent commits. -->
+</body>
+</html>
