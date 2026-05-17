@@ -2267,6 +2267,222 @@ Out of scope for v1 (deferred)
     ROOM_BUILDERS['blacksmith-forge'] = buildBlacksmithForge;
 
     // ----------------------------------------------------------------
+    // Small shared helper: a checkerboard tile texture.
+    // ----------------------------------------------------------------
+    function tileTexture({size=512, cells=8, a='#c8c4be', b='#7a7670', grout='#3a3834'} = {}) {
+      const c = document.createElement('canvas');
+      c.width = c.height = size;
+      const ctx = c.getContext('2d');
+      ctx.fillStyle = grout;
+      ctx.fillRect(0, 0, size, size);
+      const s = size / cells;
+      for (let y = 0; y < cells; y++) {
+        for (let x = 0; x < cells; x++) {
+          ctx.fillStyle = (x + y) % 2 === 0 ? a : b;
+          ctx.fillRect(x * s + 2, y * s + 2, s - 4, s - 4);
+        }
+      }
+      const tex = new THREE.CanvasTexture(c);
+      tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+      tex.colorSpace = THREE.SRGBColorSpace;
+      return tex;
+    }
+
+    // ----------------------------------------------------------------
+    // FURNISHED: brewery
+    //   homelab-core -> tile floor, brick walls, polished copper
+    //   kettles + fermentation tanks + pipework, industrial pendant,
+    //   slate hung on brick whiteboard.
+    // ----------------------------------------------------------------
+    function buildBrewery(project, roomTypeId, shared) {
+      const tile = tileTexture({ a: '#a09a90', b: '#4a4640', grout: '#1a1814' });
+      tile.repeat.set(2, 2);
+      const floorMat = new THREE.MeshStandardMaterial({
+        map: tile, color: 0x808680, roughness: 0.7, metalness: 0.05
+      });
+      const brick = brickTexture({
+        size: 512, brickW: 88, brickH: 28,
+        mortar: '#2a2520', baseR: 156, baseG: 92, baseB: 70, jitter: 28
+      });
+      brick.repeat.set(3, 1.6);
+      const wallMat = new THREE.MeshStandardMaterial({
+        map: brick, color: 0xb88878, roughness: 0.95
+      });
+      const ceilingMat = new THREE.MeshStandardMaterial({
+        color: 0x1a1410, roughness: 1.0
+      });
+
+      const shell = makeRoomShell({
+        width: 7.0, depth: 6.5, height: 4.0,
+        floorMaterial: floorMat, ceilingMaterial: ceilingMat,
+        wallFront: wallMat, wallBack: wallMat,
+        wallLeft: wallMat, wallRight: wallMat,
+        fogColor: 0x1a1208, fogNear: 5, fogFar: 22
+      });
+      const scene = shell.scene;
+      const W = shell.width, D = shell.depth, H = shell.height;
+
+      // industrial pendant — green-shaded steel reflector
+      const pendantMat = new THREE.MeshStandardMaterial({
+        color: 0x2a4438, roughness: 0.55, metalness: 0.6,
+        emissive: 0x3a2810, emissiveIntensity: 0.35
+      });
+      const pendantShade = new THREE.Mesh(new THREE.ConeGeometry(0.45, 0.4, 16, 1, true), pendantMat);
+      pendantShade.material.side = THREE.DoubleSide;
+      pendantShade.position.set(0, H - 0.4, 0);
+      pendantShade.rotation.x = Math.PI;
+      scene.add(pendantShade);
+      const pendantCord = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.02, 0.02, 0.7, 8),
+        new THREE.MeshStandardMaterial({ color: 0x1a1108, roughness: 1.0 })
+      );
+      pendantCord.position.set(0, H - 0.25, 0);
+      scene.add(pendantCord);
+      const pendantBulb = new THREE.Mesh(
+        new THREE.SphereGeometry(0.1, 14, 10),
+        new THREE.MeshBasicMaterial({ color: 0xffd49a })
+      );
+      pendantBulb.position.set(0, H - 0.65, 0);
+      scene.add(pendantBulb);
+
+      const pendantLight = new THREE.PointLight(0xffb070, 5.5, 20, 1.5);
+      pendantLight.position.set(0, H - 0.7, 0);
+      scene.add(pendantLight);
+      scene.add(new THREE.AmbientLight(0x4a3828, 0.7));
+      scene.add(new THREE.HemisphereLight(0xb08866, 0x1a0e06, 0.4));
+
+      // polished copper material — high metalness, low roughness, warm tint
+      const copper = new THREE.MeshStandardMaterial({
+        color: 0xc06a30, roughness: 0.25, metalness: 0.95
+      });
+      const copperDark = new THREE.MeshStandardMaterial({
+        color: 0x6a3818, roughness: 0.5, metalness: 0.85
+      });
+
+      // central row of copper kettles along the right side
+      function kettle(x, z, r = 0.55, h = 1.4) {
+        const g = new THREE.Group();
+        // base ring
+        const baseRing = new THREE.Mesh(
+          new THREE.CylinderGeometry(r * 1.05, r * 1.1, 0.12, 24),
+          copperDark
+        );
+        baseRing.position.set(x, 0.06, z);
+        g.add(baseRing);
+        // body
+        const body = new THREE.Mesh(
+          new THREE.CylinderGeometry(r, r * 0.95, h, 28),
+          copper
+        );
+        body.position.set(x, 0.06 + h / 2 + 0.06, z);
+        g.add(body);
+        // domed top
+        const dome = new THREE.Mesh(
+          new THREE.SphereGeometry(r * 0.95, 24, 12, 0, Math.PI * 2, 0, Math.PI / 2),
+          copper
+        );
+        dome.position.set(x, 0.06 + h + 0.12, z);
+        g.add(dome);
+        // chimney stub
+        const chimney = new THREE.Mesh(
+          new THREE.CylinderGeometry(0.08, 0.08, 0.6, 12),
+          copperDark
+        );
+        chimney.position.set(x, 0.06 + h + 0.5, z);
+        g.add(chimney);
+        return g;
+      }
+      scene.add(kettle(W/2 - 1.0, -1.4, 0.6, 1.5));
+      scene.add(kettle(W/2 - 1.0,  0.0, 0.55, 1.4));
+      scene.add(kettle(W/2 - 1.0,  1.4, 0.6, 1.5));
+
+      // pipework connecting the kettle tops — copper bars running through
+      const pipeMat = copperDark;
+      const pipe = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.05, 3.2, 12), pipeMat);
+      pipe.rotation.x = Math.PI / 2;
+      pipe.position.set(W/2 - 1.0, 0.06 + 1.5 + 0.8, 0);
+      scene.add(pipe);
+      // riser to the ceiling
+      const riser = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.06, 1.0, 12), pipeMat);
+      riser.position.set(W/2 - 1.0, H - 0.6, 0);
+      scene.add(riser);
+
+      // stainless-and-glass fermentation tanks on the left side
+      const stainless = new THREE.MeshStandardMaterial({
+        color: 0xa0a4a8, roughness: 0.35, metalness: 0.85
+      });
+      function ferm(x, z) {
+        const g = new THREE.Group();
+        const tank = new THREE.Mesh(
+          new THREE.CylinderGeometry(0.5, 0.5, 2.0, 24),
+          stainless
+        );
+        tank.position.set(x, 1.1, z);
+        g.add(tank);
+        // conical bottom
+        const cone = new THREE.Mesh(new THREE.ConeGeometry(0.5, 0.4, 24), stainless);
+        cone.position.set(x, 0.4, z);
+        cone.rotation.x = Math.PI;
+        g.add(cone);
+        // top dome
+        const top = new THREE.Mesh(
+          new THREE.SphereGeometry(0.5, 24, 12, 0, Math.PI * 2, 0, Math.PI / 2),
+          stainless
+        );
+        top.position.set(x, 2.1, z);
+        g.add(top);
+        // small valve
+        const valve = new THREE.Mesh(
+          new THREE.BoxGeometry(0.12, 0.08, 0.16),
+          copperDark
+        );
+        valve.position.set(x + 0.45, 0.5, z);
+        g.add(valve);
+        return g;
+      }
+      scene.add(ferm(-W/2 + 0.9, -1.1));
+      scene.add(ferm(-W/2 + 0.9,  1.1));
+
+      // a couple of oak barrels on the floor by the front-left corner
+      const oak = new THREE.MeshStandardMaterial({ color: 0x6a3a18, roughness: 0.9 });
+      const bands = new THREE.MeshStandardMaterial({ color: 0x2a1808, roughness: 0.6, metalness: 0.5 });
+      function barrel(x, z, rot = 0) {
+        const g = new THREE.Group();
+        const body = new THREE.Mesh(new THREE.CylinderGeometry(0.34, 0.34, 0.8, 18), oak);
+        const band1 = new THREE.Mesh(new THREE.CylinderGeometry(0.36, 0.36, 0.05, 18), bands);
+        band1.position.y = 0.32;
+        const band2 = new THREE.Mesh(new THREE.CylinderGeometry(0.36, 0.36, 0.05, 18), bands);
+        band2.position.y = -0.32;
+        g.add(body, band1, band2);
+        g.position.set(x, 0.4, z);
+        g.rotation.z = rot;
+        return g;
+      }
+      scene.add(barrel(-W/2 + 0.8, -D/2 + 1.0));
+      scene.add(barrel(-W/2 + 1.5, -D/2 + 1.2, Math.PI/2));
+
+      // slate whiteboard hung on the brick front wall
+      const wb = makePlaceholderWhiteboard({
+        width: 2.8, height: 1.7,
+        color: 0x2c2620, emissive: 0x141008, frameColor: 0x1a1208
+      });
+      wb.position.set(0, 1.75, -D/2 + 0.04);
+      wb.userData.boardKind = 'iron-framed-slate';
+      scene.add(wb);
+
+      const backDoor = buildBackDoor(D, shared.doorWood);
+      scene.add(backDoor);
+
+      return {
+        scene, width: W, depth: D, height: H,
+        backDoor, whiteboard: wb,
+        entryYaw: 0,
+        doors: [backDoor]
+      };
+    }
+    ROOM_BUILDERS['brewery'] = buildBrewery;
+
+    // ----------------------------------------------------------------
     // Whiteboard data rendering. Each furnished room declares a
     // boardKind (etched-glass / chalkboard / iron-framed-slate / ...);
     // we render the project record to a 2048x1280 canvas styled to
