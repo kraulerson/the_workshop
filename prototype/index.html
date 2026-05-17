@@ -2788,8 +2788,22 @@ Out of scope for v1 (deferred)
         // Initial heading: face the app cluster (centered on 0 deg).
         this.controller.setHeading(THREE.MathUtils.degToRad(90));
 
+        // Track mousedown -> mouseup distance so we can distinguish a
+        // tap (small movement = door pick) from a drag (large movement
+        // = look-around). A pure 'click' event still fires after a
+        // small drag in most browsers, which would inadvertently
+        // teleport the user into a room while they were panning.
+        let downAt = null;
+        canvas.addEventListener('mousedown', (e) => {
+          if (e.button === 0) downAt = { x: e.clientX, y: e.clientY };
+        });
         this._onClick = (e) => {
           if (this.animator.isActive) return;
+          if (downAt) {
+            const dx = e.clientX - downAt.x, dy = e.clientY - downAt.y;
+            downAt = null;
+            if (dx * dx + dy * dy > 36) return; // moved > 6px: treat as drag
+          }
           const hov = this.picker.hovered;
           if (!hov) return;
           if (hov.userData.isBack) {
