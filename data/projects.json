@@ -1,0 +1,23 @@
+{
+  "meta": {
+    "owner": "Karl Raulerson / Ferrum Corde LLC",
+    "last_updated": "2026-05-16",
+    "data_source": "GitHub MCP reconciliation 2026-05-16",
+    "notes": "Reconciled against github.com/kraulerson on 2026-05-16. Floor = active/shipped/blocked (numbered stations). Annex = scoped/planned (proposed projects)."
+  },
+  "domains": {
+    "framework": { "label": "Frameworks", "symbol": "§" },
+    "app": { "label": "Applications", "symbol": "¶" },
+    "mcp": { "label": "MCP / Integration", "symbol": "◊" },
+    "infrastructure": { "label": "Infrastructure", "symbol": "‡" }
+  },
+  "statuses": {
+    "shipped": { "label": "Operational" },
+    "active": { "label": "In Build" },
+    "blocked": { "label": "Blocked" },
+    "scoped": { "label": "Scoped" },
+    "planned": { "label": "Planned" }
+  },
+  "projects": [],
+  "_NOTE": "Truncated for placeholder commit. Full reconciled data follows in next commit. See /home/claude/the_workshop/data/projects.json for the verified source."
+}
