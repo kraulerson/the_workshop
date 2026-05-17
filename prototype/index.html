@@ -2483,6 +2483,174 @@ Out of scope for v1 (deferred)
     ROOM_BUILDERS['brewery'] = buildBrewery;
 
     // ----------------------------------------------------------------
+    // FURNISHED: ceramics-studio
+    //   memoryco-collab -> concrete floor, plaster walls, wood shelves
+    //   with pots, pottery wheel, kiln. Filtered daylight + task lamp.
+    //   Clay-tile mosaic frame on the whiteboard.
+    // ----------------------------------------------------------------
+    function buildCeramicsStudio(project, roomTypeId, shared) {
+      const concrete = plasterTexture({ base: '#bcb6ac', noise: 18 });
+      concrete.repeat.set(3, 3);
+      const floorMat = new THREE.MeshStandardMaterial({
+        map: concrete, color: 0xb0aaa0, roughness: 0.95
+      });
+      const plaster = plasterTexture({ base: '#e2d8c4', noise: 10 });
+      plaster.repeat.set(2, 1.2);
+      const wallMat = new THREE.MeshStandardMaterial({
+        map: plaster, color: 0xd0c4a8, roughness: 1.0,
+        emissive: 0x3a3220, emissiveIntensity: 0.2
+      });
+      const ceilingMat = new THREE.MeshStandardMaterial({
+        color: 0xe8e0c8, roughness: 1.0, emissive: 0x886844, emissiveIntensity: 0.45
+      });
+
+      const shell = makeRoomShell({
+        width: 6.5, depth: 6.0, height: 3.8,
+        floorMaterial: floorMat, ceilingMaterial: ceilingMat,
+        wallFront: wallMat, wallBack: wallMat, wallLeft: wallMat, wallRight: wallMat,
+        fogColor: 0xc8c0a8, fogNear: 6, fogFar: 22
+      });
+      const scene = shell.scene;
+      const W = shell.width, D = shell.depth, H = shell.height;
+
+      // filtered daylight from above + a warm task lamp on the right
+      scene.add(new THREE.HemisphereLight(0xfff4e0, 0x6a4828, 0.95));
+      scene.add(new THREE.AmbientLight(0xfff0d8, 0.5));
+      const sun = new THREE.DirectionalLight(0xfff4d0, 0.7);
+      sun.position.set(-1, 4, 1);
+      scene.add(sun);
+
+      // task lamp arm + warm spotlight
+      const lampMat = new THREE.MeshStandardMaterial({ color: 0x2a2622, roughness: 0.6, metalness: 0.4 });
+      const lampBase = new THREE.Mesh(new THREE.CylinderGeometry(0.12, 0.16, 0.06, 16), lampMat);
+      lampBase.position.set(W/2 - 1.4, 1.06, -1.6);
+      scene.add(lampBase);
+      const lampStem = new THREE.Mesh(new THREE.CylinderGeometry(0.025, 0.025, 0.6, 8), lampMat);
+      lampStem.position.set(W/2 - 1.4, 1.36, -1.6);
+      scene.add(lampStem);
+      const lampArm = new THREE.Mesh(new THREE.CylinderGeometry(0.025, 0.025, 0.45, 8), lampMat);
+      lampArm.position.set(W/2 - 1.6, 1.6, -1.45);
+      lampArm.rotation.z = Math.PI / 3;
+      lampArm.rotation.x = -Math.PI / 8;
+      scene.add(lampArm);
+      const lampHead = new THREE.Mesh(new THREE.ConeGeometry(0.12, 0.2, 14, 1, true), lampMat);
+      lampHead.material.side = THREE.DoubleSide;
+      lampHead.position.set(W/2 - 1.85, 1.7, -1.35);
+      lampHead.rotation.z = -Math.PI / 3;
+      scene.add(lampHead);
+      const taskLight = new THREE.SpotLight(0xfff0c0, 1.4, 4, Math.PI/4.5, 0.55, 1.6);
+      taskLight.position.set(W/2 - 1.85, 1.65, -1.35);
+      taskLight.target.position.set(W/2 - 1.4, 0.9, -1.6);
+      scene.add(taskLight); scene.add(taskLight.target);
+
+      // pottery wheel — pedestal + spinning disc
+      const wheelMat = new THREE.MeshStandardMaterial({ color: 0x3a3632, roughness: 0.85, metalness: 0.2 });
+      const pedestal = new THREE.Mesh(new THREE.CylinderGeometry(0.32, 0.36, 0.78, 18), wheelMat);
+      pedestal.position.set(W/2 - 1.4, 0.39, -1.6);
+      scene.add(pedestal);
+      const wheelTop = new THREE.Mesh(new THREE.CylinderGeometry(0.4, 0.4, 0.06, 24), wheelMat);
+      wheelTop.position.set(W/2 - 1.4, 0.81, -1.6);
+      scene.add(wheelTop);
+      // a partial pot on the wheel — cone-like grey clay
+      const clayMat = new THREE.MeshStandardMaterial({ color: 0x8a6248, roughness: 0.9 });
+      const clay = new THREE.Mesh(new THREE.CylinderGeometry(0.16, 0.22, 0.28, 20), clayMat);
+      clay.position.set(W/2 - 1.4, 0.98, -1.6);
+      scene.add(clay);
+      // splash pan around the wheel
+      const splashMat = new THREE.MeshStandardMaterial({ color: 0x6a5a4a, roughness: 0.95 });
+      const splash = new THREE.Mesh(new THREE.CylinderGeometry(0.55, 0.55, 0.06, 24, 1, true), splashMat);
+      splash.position.set(W/2 - 1.4, 0.78, -1.6);
+      scene.add(splash);
+
+      // kiln in the back-left corner — boxy with a slightly emissive door slit
+      const kilnMat = new THREE.MeshStandardMaterial({ color: 0x2a2624, roughness: 0.85, metalness: 0.2 });
+      const kiln = new THREE.Mesh(new THREE.BoxGeometry(1.2, 1.7, 1.0), kilnMat);
+      kiln.position.set(-W/2 + 0.85, 0.85, D/2 - 0.85);
+      scene.add(kiln);
+      const kilnSeam = new THREE.Mesh(
+        new THREE.BoxGeometry(0.95, 0.04, 1.01),
+        new THREE.MeshBasicMaterial({ color: 0xff7028 })
+      );
+      kilnSeam.position.set(-W/2 + 0.85, 1.0, D/2 - 0.85);
+      scene.add(kilnSeam);
+      const kilnGlow = new THREE.PointLight(0xff8030, 0.6, 3, 1.8);
+      kilnGlow.position.set(-W/2 + 0.85, 1.0, D/2 - 0.85);
+      scene.add(kilnGlow);
+
+      // wood shelves along the left wall with little pots
+      const shelfMat = new THREE.MeshStandardMaterial({ color: 0x6a4628, roughness: 0.95 });
+      const terracotta = new THREE.MeshStandardMaterial({ color: 0xc46a3a, roughness: 0.92 });
+      const glazedGreen = new THREE.MeshStandardMaterial({ color: 0x4a8068, roughness: 0.5, metalness: 0.05 });
+      const cream = new THREE.MeshStandardMaterial({ color: 0xe8d8b0, roughness: 0.8 });
+      for (let i = 0; i < 3; i++) {
+        const y = 0.9 + i * 0.85;
+        const shelf = new THREE.Mesh(new THREE.BoxGeometry(0.36, 0.04, 2.6), shelfMat);
+        shelf.position.set(-W/2 + 0.22, y, -0.4);
+        scene.add(shelf);
+        // pots on shelf
+        for (let k = 0; k < 4; k++) {
+          const zp = -0.4 + (k - 1.5) * 0.6;
+          const mat = [terracotta, glazedGreen, cream, terracotta][(i + k) % 3];
+          const pot = new THREE.Mesh(
+            new THREE.CylinderGeometry(0.09 + Math.random()*0.04, 0.1, 0.18 + Math.random()*0.1, 14),
+            mat
+          );
+          pot.position.set(-W/2 + 0.22, y + 0.13, zp);
+          scene.add(pot);
+        }
+      }
+
+      // a stack of clay slabs on the floor near the front
+      const slabMat = new THREE.MeshStandardMaterial({ color: 0x8a7058, roughness: 0.95 });
+      for (let i = 0; i < 4; i++) {
+        const slab = new THREE.Mesh(new THREE.BoxGeometry(0.6, 0.05, 0.4), slabMat);
+        slab.position.set(W/2 - 1.2, 0.025 + i * 0.05, 1.6);
+        scene.add(slab);
+      }
+
+      // whiteboard with a "mosaic" frame of terracotta tiles
+      const wb = makePlaceholderWhiteboard({
+        width: 2.7, height: 1.7,
+        color: 0xf2e8d0, emissive: 0x4a3a18, frameColor: 0x6a4828
+      });
+      // add a mosaic of terracotta cubes around the frame
+      const tileMat = new THREE.MeshStandardMaterial({ color: 0xc46a3a, roughness: 0.85 });
+      const tileMat2 = new THREE.MeshStandardMaterial({ color: 0x8a4828, roughness: 0.85 });
+      const tw = 0.13, th = 0.13, td = 0.05;
+      function tile(x, y, alt = 0) {
+        const t = new THREE.Mesh(new THREE.BoxGeometry(tw, th, td), alt ? tileMat2 : tileMat);
+        t.position.set(x, y, 0.0);
+        wb.add(t);
+      }
+      const tilesPerSide = 18;
+      for (let i = 0; i < tilesPerSide; i++) {
+        const x = -2.7/2 - 0.18 + (i + 0.5) * (2.7 + 0.36) / tilesPerSide;
+        tile(x, +1.7/2 + 0.18, i % 2);
+        tile(x, -1.7/2 - 0.18, (i + 1) % 2);
+      }
+      const tilesVert = 10;
+      for (let j = 0; j < tilesVert; j++) {
+        const y = -1.7/2 - 0.05 + (j + 0.5) * (1.7 + 0.1) / tilesVert;
+        tile(-2.7/2 - 0.18, y, j % 2);
+        tile(+2.7/2 + 0.18, y, (j + 1) % 2);
+      }
+      wb.position.set(0, 1.75, -D/2 + 0.04);
+      wb.userData.boardKind = 'default';
+      scene.add(wb);
+
+      const backDoor = buildBackDoor(D, shared.doorWood);
+      scene.add(backDoor);
+
+      return {
+        scene, width: W, depth: D, height: H,
+        backDoor, whiteboard: wb,
+        entryYaw: 0,
+        doors: [backDoor]
+      };
+    }
+    ROOM_BUILDERS['ceramics-studio'] = buildCeramicsStudio;
+
+    // ----------------------------------------------------------------
     // Whiteboard data rendering. Each furnished room declares a
     // boardKind (etched-glass / chalkboard / iron-framed-slate / ...);
     // we render the project record to a 2048x1280 canvas styled to
