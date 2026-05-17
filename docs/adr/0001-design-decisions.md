@@ -62,6 +62,15 @@ This dashboard is for Karl's personal use on his homelab. No external users. Not
 
 **Trade-offs:** If this project graduates to load-bearing infrastructure (e.g., becomes Phase 1 of the Web Hub / Four-Way Portal in the converged Alden ecosystem plan), discipline must be retrofitted. Retrofit cost is real but bounded (~30-60 minutes once decisions are clear). Accept the deferral.
 
+**Deployment (added 2026-05-17):** LAN-only, mirroring the homelab-tls-edge pattern.
+
+- Dedicated Debian 13 LXC `workshop` (VMID 124, IP `10.100.23.86`) on the VLAN-23 AI subnet. Serves the prototype with stock nginx on port 80; web root is symlinked to the git checkout at `/opt/the_workshop` so a `git pull --ff-only` (systemd timer, every 5 min) is the entire update path. Public-repo HTTPS clone, no auth on the LXC.
+- TLS terminated at the existing Caddy edge LXC (`10.100.23.71`) which already holds the Let's Encrypt `*.ferrumcorde.com` wildcard cert. Caddyfile adds a `workshop.ferrumcorde.com` matcher reverse-proxying to `10.100.23.86:80`.
+- DNS: per-host A record on both Pi-holes (`192.168.1.41`, `192.168.1.42`) pointing `workshop.ferrumcorde.com` -> `10.100.23.71`. Public Cloudflare A record points to `0.0.0.0` (DNS-only) so the wildcard ACME challenge resolves but nothing externally reachable answers.
+- Off-LAN access via Tailscale; no public ingress. Cloud Alden, Alden-1, and Claude Code CLI sessions reach the dashboard the same way Karl does (over the LAN / Tailscale subnet).
+
+Cloudflare Pages was rejected because (a) the eventual `command_center_update` write endpoint will live on the alden-bridge LXC inside the LAN anyway, so splitting the read path to Pages adds an unnecessary public surface, and (b) the LXC pattern matches every other internal service in the homelab and uses infrastructure that already exists.
+
 ### 7. Reconciliation against GitHub MCP
 
 Before any further design work, project status data was reconciled against actual repo state via the GitHub MCP at 10.100.23.80. Multiple stale entries were corrected (Tender Reminders stack was wrong, Lancache Orchestrator status was wrong, alden-bridge-mcp and alden-qdrant were three entries that should have been one monorepo entry, Karlban and homelab-tls-edge were missing entirely).
@@ -75,6 +84,7 @@ Before any further design work, project status data was reconciled against actua
 - Repo structure: README + LICENSE + .gitignore + `data/projects.json` + `docs/adr/` + `docs/room-catalog.md` + `prototype/`
 - Implementation: Three.js single-file or near-single-file HTML artifact
 - Asset pipeline: CC0 textures baked into the build, no runtime asset server
+- Deployment: LAN-only LXC + Caddy edge at `workshop.ferrumcorde.com`; see decision 6 for details
 - Future Cloud Alden / Alden-1 / Claude Code sessions can read this ADR and the room catalog to understand the design intent without re-deriving it
 
 ## Related
