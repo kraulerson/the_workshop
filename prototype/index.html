@@ -3866,6 +3866,227 @@ Out of scope for v1 (deferred)
     ROOM_BUILDERS['textile-loom-room'] = buildTextileLoomRoom;
 
     // ----------------------------------------------------------------
+    // FURNISHED: watchmaker-bench
+    //   reminder-app -> walnut paneling, small intimate room with a
+    //   white-matted bench, articulated bench lamp, brass tools,
+    //   loupe, tiny parts trays. Brass-plaque whiteboard.
+    // ----------------------------------------------------------------
+    function buildWatchmakerBench(project, roomTypeId, shared) {
+      const walnut = woodTexture({ base: '#3a2010', dark: '#180a04', stripes: 11 });
+      walnut.repeat.set(2, 1.2);
+      const wallMat = new THREE.MeshStandardMaterial({
+        map: walnut, color: 0x4a2818, roughness: 0.6, metalness: 0.1
+      });
+      const darkFloor = woodTexture({ base: '#241408', dark: '#0a0402', stripes: 9 });
+      darkFloor.repeat.set(2, 2);
+      const floorMat = new THREE.MeshStandardMaterial({
+        map: darkFloor, color: 0x382010, roughness: 0.85
+      });
+      const ceilingMat = new THREE.MeshStandardMaterial({
+        color: 0x1a0e06, roughness: 1.0
+      });
+
+      // smaller, more intimate dimensions
+      const shell = makeRoomShell({
+        width: 5.4, depth: 5.4, height: 3.4,
+        floorMaterial: floorMat, ceilingMaterial: ceilingMat,
+        wallFront: wallMat, wallBack: wallMat, wallLeft: wallMat, wallRight: wallMat,
+        fogColor: 0x0e0804, fogNear: 3, fogFar: 14
+      });
+      const scene = shell.scene;
+      const W = shell.width, D = shell.depth, H = shell.height;
+
+      // dim warm ambient
+      scene.add(new THREE.AmbientLight(0x3a2818, 0.5));
+      scene.add(new THREE.HemisphereLight(0x6a4828, 0x0a0604, 0.25));
+
+      // ------- the bench against the front wall -------
+      const benchTopMat = new THREE.MeshStandardMaterial({
+        map: walnut, color: 0x6a3a1c, roughness: 0.55, metalness: 0.1
+      });
+      const benchTop = new THREE.Mesh(new THREE.BoxGeometry(3.0, 0.06, 0.85), benchTopMat);
+      benchTop.position.set(0, 0.92, -D/2 + 0.6);
+      scene.add(benchTop);
+      // legs
+      const legMat = new THREE.MeshStandardMaterial({ color: 0x241408, roughness: 0.9 });
+      for (const [bx, bz] of [[-1.4, -0.4], [1.4, -0.4], [-1.4, 0.4], [1.4, 0.4]]) {
+        const leg = new THREE.Mesh(new THREE.BoxGeometry(0.07, 0.92, 0.07), legMat);
+        leg.position.set(bx, 0.46, -D/2 + 0.6 + bz);
+        scene.add(leg);
+      }
+      // white work mat in the middle of the bench
+      const matMat = new THREE.MeshStandardMaterial({
+        color: 0xf2ecd8, roughness: 0.7, metalness: 0.02,
+        emissive: 0x281a08, emissiveIntensity: 0.1
+      });
+      const mat = new THREE.Mesh(new THREE.BoxGeometry(1.4, 0.01, 0.7), matMat);
+      mat.position.set(0, 0.955, -D/2 + 0.6);
+      scene.add(mat);
+
+      // ------- articulated bench lamp -------
+      const lampDark = new THREE.MeshStandardMaterial({ color: 0x141008, roughness: 0.6, metalness: 0.55 });
+      const lampBrass = new THREE.MeshStandardMaterial({ color: 0xb88838, roughness: 0.4, metalness: 0.85 });
+      // base clamp
+      const lampBase = new THREE.Mesh(new THREE.CylinderGeometry(0.07, 0.09, 0.05, 14), lampDark);
+      lampBase.position.set(-1.0, 0.97, -D/2 + 0.55);
+      scene.add(lampBase);
+      // first arm
+      const arm1 = new THREE.Mesh(new THREE.CylinderGeometry(0.022, 0.022, 0.45, 10), lampDark);
+      arm1.position.set(-1.0, 1.17, -D/2 + 0.55);
+      scene.add(arm1);
+      // pivot
+      const pivot1 = new THREE.Mesh(new THREE.SphereGeometry(0.045, 12, 8), lampBrass);
+      pivot1.position.set(-1.0, 1.39, -D/2 + 0.55);
+      scene.add(pivot1);
+      // second arm angling forward over the mat
+      const arm2 = new THREE.Mesh(new THREE.CylinderGeometry(0.022, 0.022, 0.55, 10), lampDark);
+      arm2.position.set(-0.7, 1.35, -D/2 + 0.7);
+      arm2.rotation.z = -Math.PI / 3;
+      arm2.rotation.y = Math.PI / 6;
+      scene.add(arm2);
+      // head
+      const lampHead = new THREE.Mesh(new THREE.ConeGeometry(0.1, 0.16, 14, 1, true), lampDark);
+      lampHead.material.side = THREE.DoubleSide;
+      lampHead.position.set(-0.3, 1.3, -D/2 + 0.85);
+      lampHead.rotation.x = Math.PI / 5;
+      scene.add(lampHead);
+      // the warm bench-lamp spotlight
+      const taskLight = new THREE.SpotLight(0xfff0c8, 4.0, 3.2, Math.PI/5.5, 0.45, 1.5);
+      taskLight.position.set(-0.3, 1.3, -D/2 + 0.85);
+      taskLight.target.position.set(0, 0.96, -D/2 + 0.6);
+      scene.add(taskLight); scene.add(taskLight.target);
+      // a small visible bulb at the head
+      const bulb = new THREE.Mesh(
+        new THREE.SphereGeometry(0.04, 12, 8),
+        new THREE.MeshBasicMaterial({ color: 0xfff0c0 })
+      );
+      bulb.position.set(-0.3, 1.27, -D/2 + 0.91);
+      scene.add(bulb);
+
+      // ------- the watch in progress on the mat -------
+      // a small disc movement with a couple of "wheels"
+      const movementMat = new THREE.MeshStandardMaterial({ color: 0xa88030, roughness: 0.35, metalness: 0.9 });
+      const movement = new THREE.Mesh(new THREE.CylinderGeometry(0.085, 0.085, 0.015, 24), movementMat);
+      movement.position.set(0, 0.965, -D/2 + 0.6);
+      scene.add(movement);
+      // little gears (tiny tori)
+      for (let i = 0; i < 4; i++) {
+        const gear = new THREE.Mesh(
+          new THREE.CylinderGeometry(0.018 + i * 0.005, 0.018 + i * 0.005, 0.006, 18),
+          movementMat
+        );
+        gear.position.set(-0.04 + i * 0.025, 0.972, -D/2 + 0.59 + (i % 2) * 0.02);
+        scene.add(gear);
+      }
+
+      // ------- loupe stand on the right of the mat -------
+      const loupePost = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.02, 0.022, 0.42, 10),
+        lampBrass
+      );
+      loupePost.position.set(0.8, 1.16, -D/2 + 0.55);
+      scene.add(loupePost);
+      const loupeRing = new THREE.Mesh(
+        new THREE.TorusGeometry(0.08, 0.018, 10, 24),
+        lampBrass
+      );
+      loupeRing.position.set(0.8, 1.37, -D/2 + 0.55);
+      loupeRing.rotation.x = Math.PI / 2;
+      scene.add(loupeRing);
+      const lens = new THREE.Mesh(
+        new THREE.CircleGeometry(0.075, 24),
+        new THREE.MeshStandardMaterial({
+          color: 0x80b0c8, roughness: 0.1, metalness: 0.3,
+          transparent: true, opacity: 0.4
+        })
+      );
+      lens.position.set(0.8, 1.37, -D/2 + 0.55);
+      scene.add(lens);
+
+      // ------- parts trays — 3 tiny white squares to the right -------
+      const trayMat = new THREE.MeshStandardMaterial({ color: 0xf0eadc, roughness: 0.7 });
+      const trayLip = new THREE.MeshStandardMaterial({ color: 0x886c4a, roughness: 0.8 });
+      for (let i = 0; i < 3; i++) {
+        const z = -D/2 + 0.3 + i * 0.2;
+        const tray = new THREE.Mesh(new THREE.BoxGeometry(0.22, 0.02, 0.18), trayMat);
+        tray.position.set(1.25, 0.96, z);
+        scene.add(tray);
+        const lip = new THREE.Mesh(new THREE.BoxGeometry(0.24, 0.025, 0.005), trayLip);
+        lip.position.set(1.25, 0.97, z + 0.085);
+        scene.add(lip);
+        // tiny brass dot in the tray
+        const part = new THREE.Mesh(
+          new THREE.CylinderGeometry(0.012, 0.012, 0.003, 10),
+          movementMat
+        );
+        part.position.set(1.25, 0.974, z);
+        scene.add(part);
+      }
+
+      // ------- brass tool rack on the wall above the bench -------
+      const rackBoard = new THREE.Mesh(
+        new THREE.BoxGeometry(1.6, 0.18, 0.04),
+        new THREE.MeshStandardMaterial({ color: 0x241408, roughness: 0.9 })
+      );
+      rackBoard.position.set(0.4, 1.85, -D/2 + 0.06);
+      scene.add(rackBoard);
+      // tools hanging — tweezers + screwdrivers
+      for (let i = 0; i < 6; i++) {
+        const x = 0.4 + (i - 2.5) * 0.22;
+        const tool = new THREE.Mesh(
+          new THREE.CylinderGeometry(0.012, 0.012, 0.32, 8),
+          lampBrass
+        );
+        tool.position.set(x, 1.7, -D/2 + 0.04);
+        scene.add(tool);
+        // head (a small tip)
+        const tip = new THREE.Mesh(
+          new THREE.ConeGeometry(0.018, 0.04, 8),
+          new THREE.MeshStandardMaterial({ color: 0x8a6020, roughness: 0.55, metalness: 0.85 })
+        );
+        tip.position.set(x, 1.52, -D/2 + 0.04);
+        tip.rotation.x = Math.PI;
+        scene.add(tip);
+      }
+
+      // ------- engraved-brass-plaque whiteboard on the LEFT wall -------
+      // The bench is on the front wall, so put the whiteboard at a
+      // 90 degree turn for variety. We still want the camera-arrival
+      // pose to face it, so override entryYaw below.
+      const wb = makePlaceholderWhiteboard({
+        width: 2.4, height: 1.5,
+        color: 0xc89438, emissive: 0x4a3010, frameColor: 0x2a1a0a
+      });
+      wb.position.set(-W/2 + 0.04, 1.7, 0);
+      wb.rotation.y = Math.PI / 2;
+      wb.userData.boardKind = 'brass-plaque';
+      // four ornamental corner rosettes
+      const rosetteMat = new THREE.MeshStandardMaterial({ color: 0x8a6020, roughness: 0.4, metalness: 0.85 });
+      for (const [sx, sy] of [[-1.1, 0.65], [1.1, 0.65], [-1.1, -0.65], [1.1, -0.65]]) {
+        const ros = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.06, 0.02, 14), rosetteMat);
+        ros.rotation.x = Math.PI / 2;
+        ros.position.set(sx, sy, 0.03);
+        wb.add(ros);
+      }
+      scene.add(wb);
+
+      const backDoor = buildBackDoor(D, shared.doorWood);
+      scene.add(backDoor);
+
+      return {
+        scene, width: W, depth: D, height: H,
+        backDoor, whiteboard: wb,
+        // Camera entry pose: face the left wall (where the brass
+        // plaque is). Controller's forward at yaw=-90 deg is
+        // (sin(-90), 0, -cos(-90)) = (-1, 0, 0), i.e. -X. The left
+        // wall is at -X, so the data is centered on first arrival.
+        entryYaw: THREE.MathUtils.degToRad(-90),
+        doors: [backDoor]
+      };
+    }
+    ROOM_BUILDERS['watchmaker-bench'] = buildWatchmakerBench;
+
+    // ----------------------------------------------------------------
     // Whiteboard data rendering. Each furnished room declares a
     // boardKind (etched-glass / chalkboard / iron-framed-slate / ...);
     // we render the project record to a 2048x1280 canvas styled to
@@ -4273,10 +4494,24 @@ Out of scope for v1 (deferred)
             midPos: door.userData.entryPosition.clone(),
             // door world position used as lookAt during approach
             doorWorld: door.getWorldPosition(new THREE.Vector3()),
-            // room arrival pose
+            // room arrival pose — start near the back wall (where the
+            // user steps through), slide forward toward the center.
+            // The lookAt direction is derived from the room's
+            // entryYaw so rooms whose whiteboard isn't on the front
+            // wall (e.g. watchmaker-bench, whiteboard on left wall)
+            // arrive already aimed at their data display.
             roomStartPos: new THREE.Vector3(0, 1.65, roomBuilt.depth / 2 - 0.4),
             roomEndPos:   new THREE.Vector3(0, 1.65, roomBuilt.depth / 2 - 1.0),
-            roomLookAt:   new THREE.Vector3(0, 1.65, -roomBuilt.depth / 2 + 0.4),
+            roomLookAt:   (() => {
+              const yaw = roomBuilt.entryYaw || 0;
+              const dist = Math.max(roomBuilt.width, roomBuilt.depth);
+              // controller-forward at yaw is (sin yaw, 0, -cos yaw)
+              return new THREE.Vector3(
+                0 + Math.sin(yaw) * dist,
+                1.65,
+                (roomBuilt.depth / 2 - 1.0) + (-Math.cos(yaw)) * dist
+              );
+            })(),
             resolve
           };
         });
