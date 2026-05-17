@@ -114,6 +114,7 @@ Out of scope for v1 (deferred)
 <head>
   <meta charset="utf-8">
   <title>The Workshop</title>
+  <link rel="icon" href="data:,">
   <style>
     html, body {
       margin: 0; padding: 0; height: 100%; overflow: hidden;
@@ -928,23 +929,27 @@ Out of scope for v1 (deferred)
       const c = document.createElement('canvas');
       c.width = w; c.height = h;
       const ctx = c.getContext('2d');
-      // brass plaque background
+      // brass plaque background — warm cream that contrasts with brick
       const grad = ctx.createLinearGradient(0, 0, 0, h);
-      grad.addColorStop(0, '#2a1d12');
-      grad.addColorStop(1, '#120b06');
+      grad.addColorStop(0, '#e8d8a8');
+      grad.addColorStop(1, '#c8a868');
       ctx.fillStyle = grad;
       ctx.fillRect(0, 0, w, h);
-      // border
+      // dark inner border for definition against the brick
+      ctx.strokeStyle = '#3a2410';
+      ctx.lineWidth = 8;
+      ctx.strokeRect(10, 10, w - 20, h - 20);
+      // brass edge
       ctx.strokeStyle = '#a07a3a';
-      ctx.lineWidth = 6;
-      ctx.strokeRect(8, 8, w - 16, h - 16);
+      ctx.lineWidth = 3;
+      ctx.strokeRect(14, 14, w - 28, h - 28);
 
       // status shape (left side)
       const glyph = STATUS_GLYPHS[project.status] || STATUS_GLYPHS.active;
       const cx = 90, cy = h / 2, sz = 56;
       ctx.fillStyle = glyph.color;
-      ctx.strokeStyle = '#f0e6d6';
-      ctx.lineWidth = 4;
+      ctx.strokeStyle = '#1a1108';
+      ctx.lineWidth = 5;
       if (glyph.shape === 'circle') {
         ctx.beginPath(); ctx.arc(cx, cy, sz/2, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
       } else if (glyph.shape === 'square') {
@@ -960,8 +965,8 @@ Out of scope for v1 (deferred)
         ctx.fill(); ctx.stroke();
       }
 
-      // name
-      ctx.fillStyle = '#f0e6d6';
+      // name — dark on cream for legibility against brick
+      ctx.fillStyle = '#1a1108';
       ctx.textBaseline = 'middle';
       ctx.font = '600 56px -apple-system, "Segoe UI", Helvetica, sans-serif';
       // wrap long names
@@ -1200,14 +1205,14 @@ Out of scope for v1 (deferred)
       pendantGroup.add(bulb);
       scene.add(pendantGroup);
 
-      const pendantLight = new THREE.PointLight(0xffb070, 2.2, 18, 1.6);
+      const pendantLight = new THREE.PointLight(0xffb070, 6.5, 26, 1.4);
       pendantLight.position.set(0, height - 1.5, 0);
       scene.add(pendantLight);
 
       // ambient warm fill so the brick reads even in shadow
-      scene.add(new THREE.AmbientLight(0x6a4828, 0.55));
+      scene.add(new THREE.AmbientLight(0x6a4828, 0.95));
       // a hint of cool from above for contrast
-      const topFill = new THREE.HemisphereLight(0x886644, 0x1a0d05, 0.35);
+      const topFill = new THREE.HemisphereLight(0x886644, 0x1a0d05, 0.55);
       scene.add(topFill);
 
       // wall sconces — one per cluster, just past its center, helping
@@ -1215,7 +1220,7 @@ Out of scope for v1 (deferred)
       for (const dom of DOMAIN_ORDER) {
         const c = DOMAIN_CLUSTER[dom];
         const a = THREE.MathUtils.degToRad(c.centerDeg);
-        const sconceLight = new THREE.PointLight(0xff9a55, 1.2, 12, 1.8);
+        const sconceLight = new THREE.PointLight(0xff9a55, 3.2, 16, 1.6);
         sconceLight.position.set(
           Math.cos(a) * (radius - 0.7),
           height - 1.6,
@@ -1243,13 +1248,13 @@ Out of scope for v1 (deferred)
         const dx = Math.cos(a) * (radius - 0.06);
         const dz = Math.sin(a) * (radius - 0.06);
         door.position.set(dx, 0, dz);
-        // Three.js lookAt aligns -Z with (target - position). The door's
-        // +Z is the front face (knob + label sit on +Z), so we need
-        // -Z to point AWAY from origin -- i.e. look at a point further
-        // out along the radial direction. Picking 2*position works
-        // because origin is at 0 and the position vector already points
-        // radially outward.
-        door.lookAt(2 * dx, door.position.y + 1.2, 2 * dz);
+        // Three.js Object3D.lookAt for non-camera objects orients the
+        // object's +Z toward the target. The door's front (+Z carries
+        // the knob and the label plaque), so we want it pointing at
+        // the camera. Target must be at the SAME y as the door,
+        // otherwise the door tilts upward and the label drifts
+        // beyond the wall radius and is occluded by the wall.
+        door.lookAt(0, 0, 0);
 
         // Entry pose for walk-through animation (defined here so the
         // animator doesn't have to recompute trig).
@@ -1487,12 +1492,14 @@ Out of scope for v1 (deferred)
       labelCanvas.width = 1024; labelCanvas.height = 256;
       const ctx = labelCanvas.getContext('2d');
       const grad = ctx.createLinearGradient(0, 0, 0, 256);
-      grad.addColorStop(0, '#241710'); grad.addColorStop(1, '#0e0805');
+      grad.addColorStop(0, '#e8d8a8'); grad.addColorStop(1, '#c8a868');
       ctx.fillStyle = grad; ctx.fillRect(0, 0, 1024, 256);
-      ctx.strokeStyle = '#a07a3a'; ctx.lineWidth = 6;
-      ctx.strokeRect(8, 8, 1008, 240);
+      ctx.strokeStyle = '#3a2410'; ctx.lineWidth = 8;
+      ctx.strokeRect(10, 10, 1004, 236);
+      ctx.strokeStyle = '#a07a3a'; ctx.lineWidth = 3;
+      ctx.strokeRect(14, 14, 996, 228);
       // arrow glyph pointing left
-      ctx.strokeStyle = '#f0e6d6'; ctx.fillStyle = '#f0e6d6'; ctx.lineWidth = 5;
+      ctx.strokeStyle = '#1a1108'; ctx.fillStyle = '#1a1108'; ctx.lineWidth = 5;
       ctx.beginPath();
       ctx.moveTo(140, 128); ctx.lineTo(70, 128);
       ctx.moveTo(95, 100); ctx.lineTo(70, 128); ctx.lineTo(95, 156);
@@ -2755,7 +2762,7 @@ Out of scope for v1 (deferred)
         this.renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
         this.renderer.outputColorSpace = THREE.SRGBColorSpace;
         this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
-        this.renderer.toneMappingExposure = 1.0;
+        this.renderer.toneMappingExposure = 1.15;
         this._resize();
         window.addEventListener('resize', () => this._resize());
 
