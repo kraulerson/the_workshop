@@ -3724,7 +3724,10 @@ Out of scope for v1 (deferred)
       const oak = new THREE.MeshStandardMaterial({ color: 0x6a4322, roughness: 0.9 });
       const oakLight = new THREE.MeshStandardMaterial({ color: 0x8a5a30, roughness: 0.9 });
       const loomGroup = new THREE.Group();
-      loomGroup.position.set(0, 0, 0.4);
+      // Offset the loom slightly right so it doesn't block the
+      // sightline from the arrival camera (centered at x=0) to the
+      // tapestry whiteboard on the front wall.
+      loomGroup.position.set(1.4, 0, 0.4);
       // four vertical posts forming a rectangular frame
       const postGeo = new THREE.BoxGeometry(0.1, 2.0, 0.1);
       const corners = [[-0.85, -0.55], [0.85, -0.55], [-0.85, 0.55], [0.85, 0.55]];
