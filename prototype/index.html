@@ -86,8 +86,8 @@ Data loading strategy (both, per spec)
 
 Interaction model
 -----------------
-  - Mouse-move pan (middle third of viewport): passive rotation
-  - Click-drag: high-gain rotation, drag-distance maps to angle
+  - Click-drag: grab-and-pull rotation, drag-distance maps to angle
+    (no passive mouse-follow -- the room only turns while you drag)
   - Hover door: glow + scale-up, cursor -> pointer
   - Click door: 600ms walk-through (approach 300 / flash 50 / arrival 250)
   - Inside a room: same pan controls + "back to lobby" door behind user
@@ -180,7 +180,7 @@ Out of scope for v1 (deferred)
       <span id="title">The Workshop</span>
       <span id="subtitle">Lobby</span>
     </div>
-    <div id="hint">Move the mouse to look around &middot; click-drag for fine control &middot; click a door to enter</div>
+    <div id="hint">Click and drag to look around &middot; click a door to enter</div>
     <div id="back-hint" class="hidden">Click the back door or press <kbd>Esc</kbd> to return to the lobby</div>
   </div>
   <div id="loading">Building the workshop&hellip;</div>
@@ -1292,7 +1292,6 @@ Out of scope for v1 (deferred)
         this.targetPitch = 0;
         this.dragging = false;
         this.dragStart = { x: 0, y: 0, yaw: 0, pitch: 0 };
-        this.lastMouse = { x: 0.5, y: 0.5 };
         this.maxPitch = THREE.MathUtils.degToRad(35);
         this.enabled = true;
         this._bind();
@@ -1300,17 +1299,16 @@ Out of scope for v1 (deferred)
       _bind() {
         const d = this.dom;
         d.addEventListener('mousemove', this._onMove = (e) => {
+          if (!this.dragging) return;
           const rect = d.getBoundingClientRect();
-          this.lastMouse.x = (e.clientX - rect.left) / rect.width;
-          this.lastMouse.y = (e.clientY - rect.top)  / rect.height;
-          if (this.dragging) {
-            const dx = (e.clientX - this.dragStart.x) / rect.width;
-            const dy = (e.clientY - this.dragStart.y) / rect.height;
-            // drag-gain: a full-viewport drag rotates ~120deg yaw / ~60deg pitch
-            this.targetYaw   = this.dragStart.yaw   - dx * THREE.MathUtils.degToRad(180);
-            this.targetPitch = this.dragStart.pitch - dy * THREE.MathUtils.degToRad(80);
-            this.targetPitch = THREE.MathUtils.clamp(this.targetPitch, -this.maxPitch, this.maxPitch);
-          }
+          const dx = (e.clientX - this.dragStart.x) / rect.width;
+          const dy = (e.clientY - this.dragStart.y) / rect.height;
+          // grab-and-pull: drag right rotates the world right (camera
+          // turns left). A full-viewport drag rotates ~180 deg yaw /
+          // ~80 deg pitch.
+          this.targetYaw   = this.dragStart.yaw   - dx * THREE.MathUtils.degToRad(180);
+          this.targetPitch = this.dragStart.pitch - dy * THREE.MathUtils.degToRad(80);
+          this.targetPitch = THREE.MathUtils.clamp(this.targetPitch, -this.maxPitch, this.maxPitch);
         });
         d.addEventListener('mousedown', this._onDown = (e) => {
           if (e.button !== 0) return;
@@ -1327,25 +1325,9 @@ Out of scope for v1 (deferred)
       }
       update(dt) {
         if (!this.enabled) return;
-        if (!this.dragging) {
-          // passive mouse-move pan: rotate toward mouse x, only when
-          // mouse is in the middle vertical third of the screen.
-          if (this.lastMouse.y > 0.33 && this.lastMouse.y < 0.67) {
-            // map x from [0,1] to [-1,1], then to small angular velocity
-            const xCenter = this.lastMouse.x - 0.5;
-            const yawSpeed = xCenter * THREE.MathUtils.degToRad(60); // deg/s at edge
-            this.targetYaw -= yawSpeed * dt;
-          }
-          // slight pitch toward y — encourages looking up/down softly
-          if (this.lastMouse.y < 0.33) {
-            this.targetPitch = THREE.MathUtils.lerp(this.targetPitch, this.maxPitch * 0.4, 1 - Math.exp(-dt * 2));
-          } else if (this.lastMouse.y > 0.67) {
-            this.targetPitch = THREE.MathUtils.lerp(this.targetPitch, -this.maxPitch * 0.4, 1 - Math.exp(-dt * 2));
-          } else {
-            this.targetPitch = THREE.MathUtils.lerp(this.targetPitch, 0, 1 - Math.exp(-dt * 1.5));
-          }
-        }
-        // smooth follow toward targets
+        // No passive mouse-follow — rotation is driven only by
+        // click-and-drag. Smoothly chase the target so released
+        // drags don't snap.
         const k = 1 - Math.exp(-dt * 8);
         this.yaw   = THREE.MathUtils.lerp(this.yaw,   this.targetYaw,   k);
         this.pitch = THREE.MathUtils.lerp(this.pitch, this.targetPitch, k);
@@ -2285,6 +2267,1840 @@ Out of scope for v1 (deferred)
     ROOM_BUILDERS['blacksmith-forge'] = buildBlacksmithForge;
 
     // ----------------------------------------------------------------
+    // Small shared helper: a checkerboard tile texture.
+    // ----------------------------------------------------------------
+    function tileTexture({size=512, cells=8, a='#c8c4be', b='#7a7670', grout='#3a3834'} = {}) {
+      const c = document.createElement('canvas');
+      c.width = c.height = size;
+      const ctx = c.getContext('2d');
+      ctx.fillStyle = grout;
+      ctx.fillRect(0, 0, size, size);
+      const s = size / cells;
+      for (let y = 0; y < cells; y++) {
+        for (let x = 0; x < cells; x++) {
+          ctx.fillStyle = (x + y) % 2 === 0 ? a : b;
+          ctx.fillRect(x * s + 2, y * s + 2, s - 4, s - 4);
+        }
+      }
+      const tex = new THREE.CanvasTexture(c);
+      tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+      tex.colorSpace = THREE.SRGBColorSpace;
+      return tex;
+    }
+
+    // ----------------------------------------------------------------
+    // FURNISHED: brewery
+    //   homelab-core -> tile floor, brick walls, polished copper
+    //   kettles + fermentation tanks + pipework, industrial pendant,
+    //   slate hung on brick whiteboard.
+    // ----------------------------------------------------------------
+    function buildBrewery(project, roomTypeId, shared) {
+      const tile = tileTexture({ a: '#a09a90', b: '#4a4640', grout: '#1a1814' });
+      tile.repeat.set(2, 2);
+      const floorMat = new THREE.MeshStandardMaterial({
+        map: tile, color: 0x808680, roughness: 0.7, metalness: 0.05
+      });
+      const brick = brickTexture({
+        size: 512, brickW: 88, brickH: 28,
+        mortar: '#2a2520', baseR: 156, baseG: 92, baseB: 70, jitter: 28
+      });
+      brick.repeat.set(3, 1.6);
+      const wallMat = new THREE.MeshStandardMaterial({
+        map: brick, color: 0xb88878, roughness: 0.95
+      });
+      const ceilingMat = new THREE.MeshStandardMaterial({
+        color: 0x1a1410, roughness: 1.0
+      });
+
+      const shell = makeRoomShell({
+        width: 7.0, depth: 6.5, height: 4.0,
+        floorMaterial: floorMat, ceilingMaterial: ceilingMat,
+        wallFront: wallMat, wallBack: wallMat,
+        wallLeft: wallMat, wallRight: wallMat,
+        fogColor: 0x1a1208, fogNear: 5, fogFar: 22
+      });
+      const scene = shell.scene;
+      const W = shell.width, D = shell.depth, H = shell.height;
+
+      // industrial pendant — green-shaded steel reflector
+      const pendantMat = new THREE.MeshStandardMaterial({
+        color: 0x2a4438, roughness: 0.55, metalness: 0.6,
+        emissive: 0x3a2810, emissiveIntensity: 0.35
+      });
+      const pendantShade = new THREE.Mesh(new THREE.ConeGeometry(0.45, 0.4, 16, 1, true), pendantMat);
+      pendantShade.material.side = THREE.DoubleSide;
+      pendantShade.position.set(0, H - 0.4, 0);
+      pendantShade.rotation.x = Math.PI;
+      scene.add(pendantShade);
+      const pendantCord = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.02, 0.02, 0.7, 8),
+        new THREE.MeshStandardMaterial({ color: 0x1a1108, roughness: 1.0 })
+      );
+      pendantCord.position.set(0, H - 0.25, 0);
+      scene.add(pendantCord);
+      const pendantBulb = new THREE.Mesh(
+        new THREE.SphereGeometry(0.1, 14, 10),
+        new THREE.MeshBasicMaterial({ color: 0xffd49a })
+      );
+      pendantBulb.position.set(0, H - 0.65, 0);
+      scene.add(pendantBulb);
+
+      const pendantLight = new THREE.PointLight(0xffb070, 5.5, 20, 1.5);
+      pendantLight.position.set(0, H - 0.7, 0);
+      scene.add(pendantLight);
+      scene.add(new THREE.AmbientLight(0x4a3828, 0.7));
+      scene.add(new THREE.HemisphereLight(0xb08866, 0x1a0e06, 0.4));
+
+      // polished copper material — high metalness, low roughness, warm tint
+      const copper = new THREE.MeshStandardMaterial({
+        color: 0xc06a30, roughness: 0.25, metalness: 0.95
+      });
+      const copperDark = new THREE.MeshStandardMaterial({
+        color: 0x6a3818, roughness: 0.5, metalness: 0.85
+      });
+
+      // central row of copper kettles along the right side
+      function kettle(x, z, r = 0.55, h = 1.4) {
+        const g = new THREE.Group();
+        // base ring
+        const baseRing = new THREE.Mesh(
+          new THREE.CylinderGeometry(r * 1.05, r * 1.1, 0.12, 24),
+          copperDark
+        );
+        baseRing.position.set(x, 0.06, z);
+        g.add(baseRing);
+        // body
+        const body = new THREE.Mesh(
+          new THREE.CylinderGeometry(r, r * 0.95, h, 28),
+          copper
+        );
+        body.position.set(x, 0.06 + h / 2 + 0.06, z);
+        g.add(body);
+        // domed top
+        const dome = new THREE.Mesh(
+          new THREE.SphereGeometry(r * 0.95, 24, 12, 0, Math.PI * 2, 0, Math.PI / 2),
+          copper
+        );
+        dome.position.set(x, 0.06 + h + 0.12, z);
+        g.add(dome);
+        // chimney stub
+        const chimney = new THREE.Mesh(
+          new THREE.CylinderGeometry(0.08, 0.08, 0.6, 12),
+          copperDark
+        );
+        chimney.position.set(x, 0.06 + h + 0.5, z);
+        g.add(chimney);
+        return g;
+      }
+      scene.add(kettle(W/2 - 1.0, -1.4, 0.6, 1.5));
+      scene.add(kettle(W/2 - 1.0,  0.0, 0.55, 1.4));
+      scene.add(kettle(W/2 - 1.0,  1.4, 0.6, 1.5));
+
+      // pipework connecting the kettle tops — copper bars running through
+      const pipeMat = copperDark;
+      const pipe = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.05, 3.2, 12), pipeMat);
+      pipe.rotation.x = Math.PI / 2;
+      pipe.position.set(W/2 - 1.0, 0.06 + 1.5 + 0.8, 0);
+      scene.add(pipe);
+      // riser to the ceiling
+      const riser = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.06, 1.0, 12), pipeMat);
+      riser.position.set(W/2 - 1.0, H - 0.6, 0);
+      scene.add(riser);
+
+      // stainless-and-glass fermentation tanks on the left side
+      const stainless = new THREE.MeshStandardMaterial({
+        color: 0xa0a4a8, roughness: 0.35, metalness: 0.85
+      });
+      function ferm(x, z) {
+        const g = new THREE.Group();
+        const tank = new THREE.Mesh(
+          new THREE.CylinderGeometry(0.5, 0.5, 2.0, 24),
+          stainless
+        );
+        tank.position.set(x, 1.1, z);
+        g.add(tank);
+        // conical bottom
+        const cone = new THREE.Mesh(new THREE.ConeGeometry(0.5, 0.4, 24), stainless);
+        cone.position.set(x, 0.4, z);
+        cone.rotation.x = Math.PI;
+        g.add(cone);
+        // top dome
+        const top = new THREE.Mesh(
+          new THREE.SphereGeometry(0.5, 24, 12, 0, Math.PI * 2, 0, Math.PI / 2),
+          stainless
+        );
+        top.position.set(x, 2.1, z);
+        g.add(top);
+        // small valve
+        const valve = new THREE.Mesh(
+          new THREE.BoxGeometry(0.12, 0.08, 0.16),
+          copperDark
+        );
+        valve.position.set(x + 0.45, 0.5, z);
+        g.add(valve);
+        return g;
+      }
+      scene.add(ferm(-W/2 + 0.9, -1.1));
+      scene.add(ferm(-W/2 + 0.9,  1.1));
+
+      // a couple of oak barrels on the floor by the front-left corner
+      const oak = new THREE.MeshStandardMaterial({ color: 0x6a3a18, roughness: 0.9 });
+      const bands = new THREE.MeshStandardMaterial({ color: 0x2a1808, roughness: 0.6, metalness: 0.5 });
+      function barrel(x, z, rot = 0) {
+        const g = new THREE.Group();
+        const body = new THREE.Mesh(new THREE.CylinderGeometry(0.34, 0.34, 0.8, 18), oak);
+        const band1 = new THREE.Mesh(new THREE.CylinderGeometry(0.36, 0.36, 0.05, 18), bands);
+        band1.position.y = 0.32;
+        const band2 = new THREE.Mesh(new THREE.CylinderGeometry(0.36, 0.36, 0.05, 18), bands);
+        band2.position.y = -0.32;
+        g.add(body, band1, band2);
+        g.position.set(x, 0.4, z);
+        g.rotation.z = rot;
+        return g;
+      }
+      scene.add(barrel(-W/2 + 0.8, -D/2 + 1.0));
+      scene.add(barrel(-W/2 + 1.5, -D/2 + 1.2, Math.PI/2));
+
+      // slate whiteboard hung on the brick front wall
+      const wb = makePlaceholderWhiteboard({
+        width: 2.8, height: 1.7,
+        color: 0x2c2620, emissive: 0x141008, frameColor: 0x1a1208
+      });
+      wb.position.set(0, 1.75, -D/2 + 0.04);
+      wb.userData.boardKind = 'iron-framed-slate';
+      scene.add(wb);
+
+      const backDoor = buildBackDoor(D, shared.doorWood);
+      scene.add(backDoor);
+
+      return {
+        scene, width: W, depth: D, height: H,
+        backDoor, whiteboard: wb,
+        entryYaw: 0,
+        doors: [backDoor]
+      };
+    }
+    ROOM_BUILDERS['brewery'] = buildBrewery;
+
+    // ----------------------------------------------------------------
+    // FURNISHED: ceramics-studio
+    //   memoryco-collab -> concrete floor, plaster walls, wood shelves
+    //   with pots, pottery wheel, kiln. Filtered daylight + task lamp.
+    //   Clay-tile mosaic frame on the whiteboard.
+    // ----------------------------------------------------------------
+    function buildCeramicsStudio(project, roomTypeId, shared) {
+      const concrete = plasterTexture({ base: '#bcb6ac', noise: 18 });
+      concrete.repeat.set(3, 3);
+      const floorMat = new THREE.MeshStandardMaterial({
+        map: concrete, color: 0xb0aaa0, roughness: 0.95
+      });
+      const plaster = plasterTexture({ base: '#e2d8c4', noise: 10 });
+      plaster.repeat.set(2, 1.2);
+      const wallMat = new THREE.MeshStandardMaterial({
+        map: plaster, color: 0xd0c4a8, roughness: 1.0,
+        emissive: 0x3a3220, emissiveIntensity: 0.2
+      });
+      const ceilingMat = new THREE.MeshStandardMaterial({
+        color: 0xe8e0c8, roughness: 1.0, emissive: 0x886844, emissiveIntensity: 0.45
+      });
+
+      const shell = makeRoomShell({
+        width: 6.5, depth: 6.0, height: 3.8,
+        floorMaterial: floorMat, ceilingMaterial: ceilingMat,
+        wallFront: wallMat, wallBack: wallMat, wallLeft: wallMat, wallRight: wallMat,
+        fogColor: 0xc8c0a8, fogNear: 6, fogFar: 22
+      });
+      const scene = shell.scene;
+      const W = shell.width, D = shell.depth, H = shell.height;
+
+      // filtered daylight from above + a warm task lamp on the right
+      scene.add(new THREE.HemisphereLight(0xfff4e0, 0x6a4828, 0.95));
+      scene.add(new THREE.AmbientLight(0xfff0d8, 0.5));
+      const sun = new THREE.DirectionalLight(0xfff4d0, 0.7);
+      sun.position.set(-1, 4, 1);
+      scene.add(sun);
+
+      // task lamp arm + warm spotlight
+      const lampMat = new THREE.MeshStandardMaterial({ color: 0x2a2622, roughness: 0.6, metalness: 0.4 });
+      const lampBase = new THREE.Mesh(new THREE.CylinderGeometry(0.12, 0.16, 0.06, 16), lampMat);
+      lampBase.position.set(W/2 - 1.4, 1.06, -1.6);
+      scene.add(lampBase);
+      const lampStem = new THREE.Mesh(new THREE.CylinderGeometry(0.025, 0.025, 0.6, 8), lampMat);
+      lampStem.position.set(W/2 - 1.4, 1.36, -1.6);
+      scene.add(lampStem);
+      const lampArm = new THREE.Mesh(new THREE.CylinderGeometry(0.025, 0.025, 0.45, 8), lampMat);
+      lampArm.position.set(W/2 - 1.6, 1.6, -1.45);
+      lampArm.rotation.z = Math.PI / 3;
+      lampArm.rotation.x = -Math.PI / 8;
+      scene.add(lampArm);
+      const lampHead = new THREE.Mesh(new THREE.ConeGeometry(0.12, 0.2, 14, 1, true), lampMat);
+      lampHead.material.side = THREE.DoubleSide;
+      lampHead.position.set(W/2 - 1.85, 1.7, -1.35);
+      lampHead.rotation.z = -Math.PI / 3;
+      scene.add(lampHead);
+      const taskLight = new THREE.SpotLight(0xfff0c0, 1.4, 4, Math.PI/4.5, 0.55, 1.6);
+      taskLight.position.set(W/2 - 1.85, 1.65, -1.35);
+      taskLight.target.position.set(W/2 - 1.4, 0.9, -1.6);
+      scene.add(taskLight); scene.add(taskLight.target);
+
+      // pottery wheel — pedestal + spinning disc
+      const wheelMat = new THREE.MeshStandardMaterial({ color: 0x3a3632, roughness: 0.85, metalness: 0.2 });
+      const pedestal = new THREE.Mesh(new THREE.CylinderGeometry(0.32, 0.36, 0.78, 18), wheelMat);
+      pedestal.position.set(W/2 - 1.4, 0.39, -1.6);
+      scene.add(pedestal);
+      const wheelTop = new THREE.Mesh(new THREE.CylinderGeometry(0.4, 0.4, 0.06, 24), wheelMat);
+      wheelTop.position.set(W/2 - 1.4, 0.81, -1.6);
+      scene.add(wheelTop);
+      // a partial pot on the wheel — cone-like grey clay
+      const clayMat = new THREE.MeshStandardMaterial({ color: 0x8a6248, roughness: 0.9 });
+      const clay = new THREE.Mesh(new THREE.CylinderGeometry(0.16, 0.22, 0.28, 20), clayMat);
+      clay.position.set(W/2 - 1.4, 0.98, -1.6);
+      scene.add(clay);
+      // splash pan around the wheel
+      const splashMat = new THREE.MeshStandardMaterial({ color: 0x6a5a4a, roughness: 0.95 });
+      const splash = new THREE.Mesh(new THREE.CylinderGeometry(0.55, 0.55, 0.06, 24, 1, true), splashMat);
+      splash.position.set(W/2 - 1.4, 0.78, -1.6);
+      scene.add(splash);
+
+      // kiln in the back-left corner — boxy with a slightly emissive door slit
+      const kilnMat = new THREE.MeshStandardMaterial({ color: 0x2a2624, roughness: 0.85, metalness: 0.2 });
+      const kiln = new THREE.Mesh(new THREE.BoxGeometry(1.2, 1.7, 1.0), kilnMat);
+      kiln.position.set(-W/2 + 0.85, 0.85, D/2 - 0.85);
+      scene.add(kiln);
+      const kilnSeam = new THREE.Mesh(
+        new THREE.BoxGeometry(0.95, 0.04, 1.01),
+        new THREE.MeshBasicMaterial({ color: 0xff7028 })
+      );
+      kilnSeam.position.set(-W/2 + 0.85, 1.0, D/2 - 0.85);
+      scene.add(kilnSeam);
+      const kilnGlow = new THREE.PointLight(0xff8030, 0.6, 3, 1.8);
+      kilnGlow.position.set(-W/2 + 0.85, 1.0, D/2 - 0.85);
+      scene.add(kilnGlow);
+
+      // wood shelves along the left wall with little pots
+      const shelfMat = new THREE.MeshStandardMaterial({ color: 0x6a4628, roughness: 0.95 });
+      const terracotta = new THREE.MeshStandardMaterial({ color: 0xc46a3a, roughness: 0.92 });
+      const glazedGreen = new THREE.MeshStandardMaterial({ color: 0x4a8068, roughness: 0.5, metalness: 0.05 });
+      const cream = new THREE.MeshStandardMaterial({ color: 0xe8d8b0, roughness: 0.8 });
+      for (let i = 0; i < 3; i++) {
+        const y = 0.9 + i * 0.85;
+        const shelf = new THREE.Mesh(new THREE.BoxGeometry(0.36, 0.04, 2.6), shelfMat);
+        shelf.position.set(-W/2 + 0.22, y, -0.4);
+        scene.add(shelf);
+        // pots on shelf
+        for (let k = 0; k < 4; k++) {
+          const zp = -0.4 + (k - 1.5) * 0.6;
+          const mat = [terracotta, glazedGreen, cream, terracotta][(i + k) % 3];
+          const pot = new THREE.Mesh(
+            new THREE.CylinderGeometry(0.09 + Math.random()*0.04, 0.1, 0.18 + Math.random()*0.1, 14),
+            mat
+          );
+          pot.position.set(-W/2 + 0.22, y + 0.13, zp);
+          scene.add(pot);
+        }
+      }
+
+      // a stack of clay slabs on the floor near the front
+      const slabMat = new THREE.MeshStandardMaterial({ color: 0x8a7058, roughness: 0.95 });
+      for (let i = 0; i < 4; i++) {
+        const slab = new THREE.Mesh(new THREE.BoxGeometry(0.6, 0.05, 0.4), slabMat);
+        slab.position.set(W/2 - 1.2, 0.025 + i * 0.05, 1.6);
+        scene.add(slab);
+      }
+
+      // whiteboard with a "mosaic" frame of terracotta tiles
+      const wb = makePlaceholderWhiteboard({
+        width: 2.7, height: 1.7,
+        color: 0xf2e8d0, emissive: 0x4a3a18, frameColor: 0x6a4828
+      });
+      // add a mosaic of terracotta cubes around the frame
+      const tileMat = new THREE.MeshStandardMaterial({ color: 0xc46a3a, roughness: 0.85 });
+      const tileMat2 = new THREE.MeshStandardMaterial({ color: 0x8a4828, roughness: 0.85 });
+      const tw = 0.13, th = 0.13, td = 0.05;
+      function tile(x, y, alt = 0) {
+        const t = new THREE.Mesh(new THREE.BoxGeometry(tw, th, td), alt ? tileMat2 : tileMat);
+        t.position.set(x, y, 0.0);
+        wb.add(t);
+      }
+      const tilesPerSide = 18;
+      for (let i = 0; i < tilesPerSide; i++) {
+        const x = -2.7/2 - 0.18 + (i + 0.5) * (2.7 + 0.36) / tilesPerSide;
+        tile(x, +1.7/2 + 0.18, i % 2);
+        tile(x, -1.7/2 - 0.18, (i + 1) % 2);
+      }
+      const tilesVert = 10;
+      for (let j = 0; j < tilesVert; j++) {
+        const y = -1.7/2 - 0.05 + (j + 0.5) * (1.7 + 0.1) / tilesVert;
+        tile(-2.7/2 - 0.18, y, j % 2);
+        tile(+2.7/2 + 0.18, y, (j + 1) % 2);
+      }
+      wb.position.set(0, 1.75, -D/2 + 0.04);
+      wb.userData.boardKind = 'default';
+      scene.add(wb);
+
+      const backDoor = buildBackDoor(D, shared.doorWood);
+      scene.add(backDoor);
+
+      return {
+        scene, width: W, depth: D, height: H,
+        backDoor, whiteboard: wb,
+        entryYaw: 0,
+        doors: [backDoor]
+      };
+    }
+    ROOM_BUILDERS['ceramics-studio'] = buildCeramicsStudio;
+
+    // ----------------------------------------------------------------
+    // FURNISHED: cnc-mill-cell
+    //   homelab-tls-edge -> polished concrete floor, painted machine
+    //   green CNC enclosure, fluorescent + enclosure light, control
+    //   pendant on arm. Steel-sheet whiteboard.
+    // ----------------------------------------------------------------
+    function buildCncMillCell(project, roomTypeId, shared) {
+      const polishedConcrete = plasterTexture({ base: '#6a6e72', noise: 10 });
+      polishedConcrete.repeat.set(2.5, 2.5);
+      const floorMat = new THREE.MeshStandardMaterial({
+        map: polishedConcrete, color: 0x707478, roughness: 0.35, metalness: 0.1
+      });
+      const wallPaint = new THREE.MeshStandardMaterial({
+        color: 0x9ca0a4, roughness: 0.7, metalness: 0.05,
+        emissive: 0x202428, emissiveIntensity: 0.25
+      });
+      const ceilingMat = new THREE.MeshStandardMaterial({
+        color: 0xe0e4e8, roughness: 0.95,
+        emissive: 0xa0c0d0, emissiveIntensity: 0.6
+      });
+
+      const shell = makeRoomShell({
+        width: 7.0, depth: 6.5, height: 4.0,
+        floorMaterial: floorMat, ceilingMaterial: ceilingMat,
+        wallFront: wallPaint, wallBack: wallPaint,
+        wallLeft: wallPaint, wallRight: wallPaint,
+        fogColor: 0x6a7078, fogNear: 6, fogFar: 22
+      });
+      const scene = shell.scene;
+      const W = shell.width, D = shell.depth, H = shell.height;
+
+      // cool fluorescent overhead + slightly cool ambient
+      scene.add(new THREE.AmbientLight(0xc8d4e0, 0.75));
+      scene.add(new THREE.HemisphereLight(0xe0f0ff, 0x303a48, 0.65));
+      const fluo1 = new THREE.RectAreaLight(0xffffff, 6, 2.0, 0.4);
+      fluo1.position.set(-1.5, H - 0.1, 0);
+      fluo1.rotation.x = -Math.PI / 2;
+      scene.add(fluo1);
+      const fluo2 = fluo1.clone();
+      fluo2.position.set(1.5, H - 0.1, 0);
+      scene.add(fluo2);
+      // visible fluorescent housings
+      const fluoMat = new THREE.MeshBasicMaterial({ color: 0xeef4ff });
+      for (const x of [-1.5, 1.5]) {
+        const housing = new THREE.Mesh(new THREE.BoxGeometry(2.0, 0.06, 0.4), fluoMat);
+        housing.position.set(x, H - 0.08, 0);
+        scene.add(housing);
+      }
+
+      // ------- CNC mill enclosure (the centerpiece) -------
+      const machineGreen = new THREE.MeshStandardMaterial({
+        color: 0x4a6850, roughness: 0.55, metalness: 0.4
+      });
+      const machineDark = new THREE.MeshStandardMaterial({
+        color: 0x202824, roughness: 0.7, metalness: 0.5
+      });
+      const glassMat = new THREE.MeshStandardMaterial({
+        color: 0x18302a, roughness: 0.15, metalness: 0.2,
+        emissive: 0x4a8060, emissiveIntensity: 0.35,
+        transparent: true, opacity: 0.7
+      });
+
+      // Park the mill against the LEFT wall and rotate it 90 deg so
+      // it faces into the room. Centering it would block the camera's
+      // view of the rest of the cell as soon as the user walks in.
+      const millGroup = new THREE.Group();
+      millGroup.position.set(-W/2 + 0.9, 0, 0.2);
+      millGroup.rotation.y = Math.PI / 2;
+      // base
+      const millBase = new THREE.Mesh(new THREE.BoxGeometry(2.4, 0.5, 1.6), machineDark);
+      millBase.position.set(0, 0.25, 0);
+      millGroup.add(millBase);
+      // main body
+      const millBody = new THREE.Mesh(new THREE.BoxGeometry(2.4, 1.8, 1.6), machineGreen);
+      millBody.position.set(0, 1.4, 0);
+      millGroup.add(millBody);
+      // tinted window on the front
+      const window1 = new THREE.Mesh(new THREE.BoxGeometry(1.6, 1.1, 0.02), glassMat);
+      window1.position.set(0, 1.55, 0.81);
+      millGroup.add(window1);
+      // little glow from inside
+      const insideGlow = new THREE.PointLight(0xb0e0d0, 1.2, 3, 1.5);
+      insideGlow.position.set(0, 1.4, 0.5);
+      millGroup.add(insideGlow);
+      // hint of the cutter inside (a vertical post + spindle)
+      const post = new THREE.Mesh(new THREE.BoxGeometry(0.12, 1.0, 0.12), machineDark);
+      post.position.set(0, 1.9, 0.3);
+      millGroup.add(post);
+      const spindle = new THREE.Mesh(new THREE.CylinderGeometry(0.08, 0.05, 0.4, 12), new THREE.MeshStandardMaterial({ color: 0xb8bcc0, roughness: 0.4, metalness: 0.8 }));
+      spindle.position.set(0, 1.4, 0.3);
+      millGroup.add(spindle);
+      // top hood
+      const millTop = new THREE.Mesh(new THREE.BoxGeometry(2.4, 0.3, 1.6), machineDark);
+      millTop.position.set(0, 2.45, 0);
+      millGroup.add(millTop);
+      // label strip
+      const labelMat = new THREE.MeshBasicMaterial({ color: 0xeaeaea });
+      const labelStrip = new THREE.Mesh(new THREE.BoxGeometry(0.6, 0.15, 0.02), labelMat);
+      labelStrip.position.set(0, 2.18, 0.82);
+      millGroup.add(labelStrip);
+      scene.add(millGroup);
+
+      // ------- control pendant on swing arm (rotated to match mill on left wall) -------
+      const armMat = new THREE.MeshStandardMaterial({ color: 0x202428, roughness: 0.6, metalness: 0.7 });
+      const arm1 = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.06, 0.9), armMat);
+      arm1.position.set(-W/2 + 0.9, 2.0, -1.3);
+      arm1.rotation.y = Math.PI / 4;
+      scene.add(arm1);
+      const pendant = new THREE.Mesh(new THREE.BoxGeometry(0.35, 0.55, 0.1), armMat);
+      pendant.position.set(-W/2 + 1.4, 1.7, -1.8);
+      pendant.rotation.y = Math.PI / 3;
+      scene.add(pendant);
+      const pendantScreen = new THREE.Mesh(
+        new THREE.PlaneGeometry(0.28, 0.2),
+        new THREE.MeshBasicMaterial({ color: 0x4ae098 })
+      );
+      pendantScreen.position.set(-W/2 + 1.46, 1.78, -1.83);
+      pendantScreen.rotation.y = Math.PI / 3;
+      scene.add(pendantScreen);
+
+      // chip pan with swarf (just in front of the mill, against the left wall)
+      const chipPan = new THREE.Mesh(
+        new THREE.BoxGeometry(0.8, 0.06, 1.4),
+        new THREE.MeshStandardMaterial({ color: 0x16181c, roughness: 0.7, metalness: 0.6 })
+      );
+      chipPan.position.set(-W/2 + 2.0, 0.05, 0.2);
+      scene.add(chipPan);
+      const swarfMat = new THREE.MeshStandardMaterial({ color: 0x9ca0a8, roughness: 0.45, metalness: 0.85 });
+      for (let i = 0; i < 14; i++) {
+        const sw = new THREE.Mesh(
+          new THREE.TorusGeometry(0.04 + Math.random() * 0.04, 0.012, 6, 14, Math.PI),
+          swarfMat
+        );
+        sw.position.set(-W/2 + 2.0 + (Math.random() - 0.5) * 0.6, 0.1, -0.5 + Math.random());
+        sw.rotation.set(Math.random() * Math.PI, Math.random() * Math.PI, Math.random() * Math.PI);
+        scene.add(sw);
+      }
+
+      // coolant puddle (subtle teal reflective patch)
+      const coolant = new THREE.Mesh(
+        new THREE.CircleGeometry(0.45, 24),
+        new THREE.MeshStandardMaterial({ color: 0x2a5048, roughness: 0.1, metalness: 0.6, emissive: 0x0a2a20, emissiveIntensity: 0.3 })
+      );
+      coolant.rotation.x = -Math.PI / 2;
+      coolant.position.set(-W/2 + 2.4, 0.005, 1.5);
+      scene.add(coolant);
+
+      // tool cart against the right wall — drawers
+      const cartMat = new THREE.MeshStandardMaterial({ color: 0x9c2a22, roughness: 0.55, metalness: 0.4 });
+      const cartBody = new THREE.Mesh(new THREE.BoxGeometry(0.7, 1.1, 0.5), cartMat);
+      cartBody.position.set(W/2 - 0.45, 0.55, -1.4);
+      scene.add(cartBody);
+      // drawer faces
+      const drawerMat = new THREE.MeshStandardMaterial({ color: 0x7a1612, roughness: 0.5, metalness: 0.5 });
+      for (let i = 0; i < 4; i++) {
+        const d = new THREE.Mesh(new THREE.BoxGeometry(0.66, 0.22, 0.02), drawerMat);
+        d.position.set(W/2 - 0.45, 0.18 + i * 0.26, -1.4 + 0.26);
+        scene.add(d);
+        // pull
+        const pull = new THREE.Mesh(new THREE.BoxGeometry(0.18, 0.02, 0.03), new THREE.MeshStandardMaterial({ color: 0xc0c4c8, roughness: 0.3, metalness: 0.85 }));
+        pull.position.set(W/2 - 0.45, 0.18 + i * 0.26, -1.4 + 0.275);
+        scene.add(pull);
+      }
+      // top of cart with a couple of tools — calipers + endmill
+      const caliper = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.02, 0.06), new THREE.MeshStandardMaterial({ color: 0xb8c0c8, roughness: 0.35, metalness: 0.8 }));
+      caliper.position.set(W/2 - 0.45, 1.13, -1.4);
+      scene.add(caliper);
+      const endmill = new THREE.Mesh(new THREE.CylinderGeometry(0.025, 0.025, 0.18, 12), new THREE.MeshStandardMaterial({ color: 0xd0d4d8, roughness: 0.4, metalness: 0.9 }));
+      endmill.position.set(W/2 - 0.55, 1.22, -1.5);
+      endmill.rotation.z = Math.PI / 2;
+      scene.add(endmill);
+
+      // steel-sheet whiteboard mounted on the front wall, biased
+      // right-of-center so it's clear of the mill (which now lives
+      // along the left wall)
+      const wb = makePlaceholderWhiteboard({
+        width: 2.6, height: 1.7,
+        color: 0xc0c5c8, emissive: 0x303840, frameColor: 0x1a1d20
+      });
+      wb.position.set(1.0, 1.85, -D/2 + 0.04);
+      wb.userData.boardKind = 'steel-sheet';
+      // add rivet-like studs at each corner of the frame
+      const stud = new THREE.MeshStandardMaterial({ color: 0x9ea4a8, roughness: 0.4, metalness: 0.7 });
+      for (const sx of [-1.3, 1.3]) {
+        for (const sy of [-0.85, 0.85]) {
+          const s = new THREE.Mesh(new THREE.SphereGeometry(0.035, 12, 8), stud);
+          s.position.set(sx, sy, 0.03);
+          wb.add(s);
+        }
+      }
+      scene.add(wb);
+
+      const backDoor = buildBackDoor(D, shared.doorWood);
+      scene.add(backDoor);
+
+      return {
+        scene, width: W, depth: D, height: H,
+        backDoor, whiteboard: wb,
+        entryYaw: 0,
+        doors: [backDoor]
+      };
+    }
+    ROOM_BUILDERS['cnc-mill-cell'] = buildCncMillCell;
+
+    // ----------------------------------------------------------------
+    // FURNISHED: dye-vat-room
+    //   game-shelf + command-center -> steaming dye vats, hanging cloth,
+    //   bamboo poles, tile floor, white plaster, copper vats. Diffuse
+    //   window. Dye-stained board (using tapestry theme).
+    // ----------------------------------------------------------------
+    function buildDyeVatRoom(project, roomTypeId, shared) {
+      const tile = tileTexture({ a: '#d8d2c4', b: '#a8a094', grout: '#5a564a' });
+      tile.repeat.set(2, 2);
+      const floorMat = new THREE.MeshStandardMaterial({
+        map: tile, color: 0xd0c8b4, roughness: 0.6
+      });
+      const plaster = plasterTexture({ base: '#e8e2d0', noise: 8 });
+      plaster.repeat.set(2, 1.2);
+      const wallMat = new THREE.MeshStandardMaterial({
+        map: plaster, color: 0xe0d8c0, roughness: 1.0,
+        emissive: 0x4a4030, emissiveIntensity: 0.25
+      });
+      const ceilingMat = new THREE.MeshStandardMaterial({
+        color: 0xf0e8d4, roughness: 1.0, emissive: 0xa08c70, emissiveIntensity: 0.55
+      });
+
+      const shell = makeRoomShell({
+        width: 7.0, depth: 6.5, height: 4.2,
+        floorMaterial: floorMat, ceilingMaterial: ceilingMat,
+        wallFront: wallMat, wallBack: wallMat, wallLeft: wallMat, wallRight: wallMat,
+        fogColor: 0xd8ccb0, fogNear: 6, fogFar: 24
+      });
+      const scene = shell.scene;
+      const W = shell.width, D = shell.depth, H = shell.height;
+
+      // diffuse window light + ambient — feels like a sun-soaked atelier
+      scene.add(new THREE.HemisphereLight(0xfff4e0, 0x6a5840, 1.0));
+      scene.add(new THREE.AmbientLight(0xfff0d8, 0.55));
+      const window1 = new THREE.DirectionalLight(0xfff4d0, 0.8);
+      window1.position.set(-3, 4, 2);
+      scene.add(window1);
+
+      // three copper dye vats with brightly colored dye baths
+      const copper = new THREE.MeshStandardMaterial({
+        color: 0xc06a30, roughness: 0.35, metalness: 0.9
+      });
+      const copperDark = new THREE.MeshStandardMaterial({
+        color: 0x6a3818, roughness: 0.5, metalness: 0.85
+      });
+      const dyes = [
+        { liquid: 0x8a2868, glow: 0x4a1030 },   // magenta
+        { liquid: 0x4030a8, glow: 0x1a1050 },   // indigo
+        { liquid: 0xd8a020, glow: 0x6a4810 }    // saffron yellow
+      ];
+      for (let i = 0; i < 3; i++) {
+        const x = -2.2 + i * 2.2;
+        const z = -0.4;
+        // base ring
+        const base = new THREE.Mesh(
+          new THREE.CylinderGeometry(0.62, 0.66, 0.12, 20),
+          copperDark
+        );
+        base.position.set(x, 0.06, z);
+        scene.add(base);
+        // vat body
+        const body = new THREE.Mesh(
+          new THREE.CylinderGeometry(0.6, 0.55, 0.95, 24),
+          copper
+        );
+        body.position.set(x, 0.6, z);
+        scene.add(body);
+        // liquid surface
+        const dye = dyes[i];
+        const liquid = new THREE.Mesh(
+          new THREE.CircleGeometry(0.55, 24),
+          new THREE.MeshStandardMaterial({
+            color: dye.liquid, roughness: 0.25, metalness: 0.1,
+            emissive: dye.glow, emissiveIntensity: 0.5
+          })
+        );
+        liquid.rotation.x = -Math.PI / 2;
+        liquid.position.set(x, 1.05, z);
+        scene.add(liquid);
+        // a small point light tinted by the dye color (bouncing off the rim)
+        const tintLight = new THREE.PointLight(dye.liquid, 0.7, 3, 1.8);
+        tintLight.position.set(x, 1.3, z);
+        scene.add(tintLight);
+        // steam puffs above
+        const steamMat = new THREE.MeshBasicMaterial({
+          color: 0xffffff, transparent: true, opacity: 0.18
+        });
+        for (let s = 0; s < 3; s++) {
+          const puff = new THREE.Mesh(
+            new THREE.SphereGeometry(0.18 + Math.random() * 0.1, 10, 8),
+            steamMat
+          );
+          puff.position.set(x + (Math.random() - 0.5) * 0.3, 1.4 + s * 0.35 + Math.random() * 0.1, z + (Math.random() - 0.5) * 0.3);
+          scene.add(puff);
+        }
+      }
+
+      // horizontal bamboo poles spanning the room high up, with cloth draped over them
+      const bamboo = new THREE.MeshStandardMaterial({
+        color: 0xc8a868, roughness: 0.85, metalness: 0.0,
+        emissive: 0x3a3018, emissiveIntensity: 0.1
+      });
+      // Poles run along the SIDES of the room rather than spanning
+      // front-to-back -- otherwise the hanging cloth dangles directly
+      // between the camera and the whiteboard on the front wall.
+      const clothColors = [0x6a2858, 0x3848a8, 0xc88840, 0xa05060, 0x489088];
+      const poleXs = [-W/2 + 0.6, W/2 - 0.6];
+      for (let p = 0; p < poleXs.length; p++) {
+        const pole = new THREE.Mesh(
+          new THREE.CylinderGeometry(0.04, 0.04, D - 0.8, 8),
+          bamboo
+        );
+        pole.rotation.x = Math.PI / 2;
+        pole.position.set(poleXs[p], H - 0.7, 0);
+        scene.add(pole);
+        // hang cloth panels off the pole, along the side of the room
+        const panels = 4;
+        for (let i = 0; i < panels; i++) {
+          const t = (i + 0.5) / panels;
+          const cz = (t - 0.5) * (D - 1.6);
+          const c = clothColors[(i + p) % clothColors.length];
+          const cloth = new THREE.Mesh(
+            new THREE.PlaneGeometry(0.65, 0.9),
+            new THREE.MeshStandardMaterial({
+              color: c, roughness: 0.95, side: THREE.DoubleSide,
+              emissive: c, emissiveIntensity: 0.08
+            })
+          );
+          cloth.position.set(poleXs[p] + (p === 0 ? 0.05 : -0.05), H - 1.2, cz);
+          cloth.rotation.y = Math.PI / 2;
+          cloth.rotation.x = (Math.random() - 0.5) * 0.15;
+          scene.add(cloth);
+        }
+      }
+
+      // a wooden stirring paddle leaning against the front wall
+      const paddleMat = new THREE.MeshStandardMaterial({ color: 0x6a4622, roughness: 0.9 });
+      const paddleHandle = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.025, 0.025, 1.6, 10),
+        paddleMat
+      );
+      paddleHandle.position.set(W/2 - 0.4, 0.9, -D/2 + 0.6);
+      paddleHandle.rotation.z = -Math.PI / 12;
+      scene.add(paddleHandle);
+      const paddleBlade = new THREE.Mesh(
+        new THREE.BoxGeometry(0.12, 0.32, 0.02),
+        paddleMat
+      );
+      paddleBlade.position.set(W/2 - 0.4 + 0.18, 0.18, -D/2 + 0.6);
+      paddleBlade.rotation.z = -Math.PI / 12;
+      scene.add(paddleBlade);
+
+      // whiteboard with tapestry theme + extra dye-splatter spots
+      // overlaid as small emissive discs on the frame for "dye-stained"
+      const wb = makePlaceholderWhiteboard({
+        width: 2.8, height: 1.7,
+        color: 0xe8d4a8, emissive: 0x4a3018, frameColor: 0x3a1a14
+      });
+      wb.position.set(0, 1.8, -D/2 + 0.04);
+      wb.userData.boardKind = 'tapestry';
+      // a few colored "splats" on the dark frame
+      const splatCols = [0x8a2868, 0x4030a8, 0xd8a020, 0x489088];
+      for (let i = 0; i < 8; i++) {
+        const sx = (Math.random() - 0.5) * 3.0;
+        const sy = (Math.random() < 0.5 ? -1 : 1) * (0.85 + Math.random() * 0.1);
+        const col = splatCols[i % splatCols.length];
+        const splat = new THREE.Mesh(
+          new THREE.CircleGeometry(0.05 + Math.random() * 0.04, 14),
+          new THREE.MeshBasicMaterial({ color: col })
+        );
+        splat.position.set(sx, sy, 0.03);
+        wb.add(splat);
+      }
+      scene.add(wb);
+
+      const backDoor = buildBackDoor(D, shared.doorWood);
+      scene.add(backDoor);
+
+      return {
+        scene, width: W, depth: D, height: H,
+        backDoor, whiteboard: wb,
+        entryYaw: 0,
+        doors: [backDoor]
+      };
+    }
+    ROOM_BUILDERS['dye-vat-room'] = buildDyeVatRoom;
+
+    // ----------------------------------------------------------------
+    // FURNISHED: foundry
+    //   lancache-orchestrator -> sand floor, firebrick walls,
+    //   blackened iron, melting furnace dominating the lighting,
+    //   sand-casting flasks on the floor. Etched slate plaque on stone.
+    // ----------------------------------------------------------------
+    function buildFoundry(project, roomTypeId, shared) {
+      const sand = plasterTexture({ base: '#8a7048', noise: 28 });
+      sand.repeat.set(3, 3);
+      const floorMat = new THREE.MeshStandardMaterial({
+        map: sand, color: 0x8a7250, roughness: 1.0
+      });
+      // firebrick — warmer, lighter than red brick
+      const firebrick = brickTexture({
+        size: 512, brickW: 84, brickH: 30,
+        mortar: '#3a281c', baseR: 188, baseG: 124, baseB: 78, jitter: 24
+      });
+      firebrick.repeat.set(2.5, 1.5);
+      const wallMat = new THREE.MeshStandardMaterial({
+        map: firebrick, color: 0xc89868, roughness: 0.95
+      });
+      const ceilingMat = new THREE.MeshStandardMaterial({
+        color: 0x141008, roughness: 1.0
+      });
+
+      const shell = makeRoomShell({
+        width: 7.0, depth: 6.5, height: 4.2,
+        floorMaterial: floorMat, ceilingMaterial: ceilingMat,
+        wallFront: wallMat, wallBack: wallMat, wallLeft: wallMat, wallRight: wallMat,
+        fogColor: 0x180d04, fogNear: 4, fogFar: 18
+      });
+      const scene = shell.scene;
+      const W = shell.width, D = shell.depth, H = shell.height;
+
+      // ceiling crossbeams
+      const beamMat = new THREE.MeshStandardMaterial({ color: 0x261008, roughness: 1.0 });
+      for (const x of [-W/3, W/3]) {
+        const beam = new THREE.Mesh(new THREE.BoxGeometry(0.4, 0.4, D), beamMat);
+        beam.position.set(x, H - 0.22, 0);
+        scene.add(beam);
+      }
+
+      // dim ambient
+      scene.add(new THREE.AmbientLight(0x2a1810, 0.45));
+      // a very weak cool fill so corners don't go absolute black
+      scene.add(new THREE.HemisphereLight(0x4a4032, 0x0a0604, 0.25));
+
+      // ------- big melting furnace, centered slightly back -------
+      const furnaceMat = new THREE.MeshStandardMaterial({
+        map: firebrick, color: 0xa07050, roughness: 0.95
+      });
+      const ironDark = new THREE.MeshStandardMaterial({
+        color: 0x121008, roughness: 0.7, metalness: 0.55
+      });
+
+      const furnaceGroup = new THREE.Group();
+      furnaceGroup.position.set(-0.5, 0, 0.4);
+      // squat brick body — wider at base
+      const fBase = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.95, 1.05, 0.4, 24),
+        furnaceMat
+      );
+      fBase.position.set(0, 0.2, 0);
+      furnaceGroup.add(fBase);
+      // upper barrel
+      const fBarrel = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.85, 0.95, 1.7, 24),
+        furnaceMat
+      );
+      fBarrel.position.set(0, 1.25, 0);
+      furnaceGroup.add(fBarrel);
+      // iron band rings
+      for (const y of [0.45, 1.6, 2.0]) {
+        const band = new THREE.Mesh(
+          new THREE.CylinderGeometry(0.94, 0.94, 0.06, 28),
+          ironDark
+        );
+        band.position.set(0, y, 0);
+        furnaceGroup.add(band);
+      }
+      // tap-hole on the front — glowing slit
+      const tapHole = new THREE.Mesh(
+        new THREE.PlaneGeometry(0.32, 0.18),
+        new THREE.MeshBasicMaterial({ color: 0xffa040 })
+      );
+      tapHole.position.set(0, 0.55, 0.96);
+      furnaceGroup.add(tapHole);
+      // taller chimney
+      const chimney = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.32, 0.32, 1.6, 16),
+        ironDark
+      );
+      chimney.position.set(0, 2.9, 0);
+      furnaceGroup.add(chimney);
+      // top crown glow
+      const crown = new THREE.Mesh(
+        new THREE.CircleGeometry(0.55, 24),
+        new THREE.MeshBasicMaterial({ color: 0xffb060 })
+      );
+      crown.rotation.x = -Math.PI / 2;
+      crown.position.set(0, 2.11, 0);
+      furnaceGroup.add(crown);
+      scene.add(furnaceGroup);
+
+      // dominant orange light from inside the furnace
+      const fInside = new THREE.PointLight(0xff7028, 7.0, 12, 1.5);
+      fInside.position.copy(furnaceGroup.position);
+      fInside.position.y = 1.2;
+      scene.add(fInside);
+      // a softer warmth higher up
+      const fCrown = new THREE.PointLight(0xff8a40, 2.0, 9, 1.7);
+      fCrown.position.copy(furnaceGroup.position);
+      fCrown.position.y = 2.2;
+      scene.add(fCrown);
+      // a small light AT the tap hole pointing outward (cheats a glow on the sand)
+      const fTap = new THREE.PointLight(0xff8030, 1.5, 4, 2.0);
+      fTap.position.set(furnaceGroup.position.x, 0.55, furnaceGroup.position.z + 1.4);
+      scene.add(fTap);
+
+      // ------- crucible on a stand off to the side -------
+      const cStand = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.22, 0.32, 0.5, 14),
+        ironDark
+      );
+      cStand.position.set(1.6, 0.25, -0.4);
+      scene.add(cStand);
+      const crucible = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.22, 0.16, 0.32, 14),
+        new THREE.MeshStandardMaterial({ color: 0x2a1810, roughness: 0.6, metalness: 0.5,
+          emissive: 0xff5020, emissiveIntensity: 0.35 })
+      );
+      crucible.position.set(1.6, 0.66, -0.4);
+      scene.add(crucible);
+      const molten = new THREE.Mesh(
+        new THREE.CircleGeometry(0.18, 16),
+        new THREE.MeshBasicMaterial({ color: 0xfff080 })
+      );
+      molten.rotation.x = -Math.PI / 2;
+      molten.position.set(1.6, 0.82, -0.4);
+      scene.add(molten);
+      const moltenGlow = new THREE.PointLight(0xffa050, 1.4, 3, 1.7);
+      moltenGlow.position.set(1.6, 1.0, -0.4);
+      scene.add(moltenGlow);
+
+      // ------- sand-casting flasks on the floor -------
+      const flaskFrame = new THREE.MeshStandardMaterial({ color: 0x2a1810, roughness: 0.85, metalness: 0.3 });
+      const moldSand = new THREE.MeshStandardMaterial({ color: 0x6a5238, roughness: 1.0 });
+      function flask(x, z) {
+        const g = new THREE.Group();
+        const top = new THREE.Mesh(new THREE.BoxGeometry(0.7, 0.08, 0.5), flaskFrame);
+        top.position.set(x, 0.34, z);
+        g.add(top);
+        const bot = top.clone();
+        bot.position.y = 0.16;
+        g.add(bot);
+        const sandTop = new THREE.Mesh(new THREE.BoxGeometry(0.62, 0.09, 0.42), moldSand);
+        sandTop.position.set(x, 0.29, z);
+        g.add(sandTop);
+        return g;
+      }
+      scene.add(flask(-2.2, -1.6));
+      scene.add(flask(-1.4, -1.6));
+      scene.add(flask(1.4, 1.8));
+
+      // ------- pouring ladle leaning against the right wall -------
+      const ladleHandle = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.025, 0.025, 1.8, 10),
+        new THREE.MeshStandardMaterial({ color: 0x3a2010, roughness: 0.95 })
+      );
+      ladleHandle.position.set(W/2 - 0.4, 0.9, -1.0);
+      ladleHandle.rotation.z = Math.PI / 14;
+      scene.add(ladleHandle);
+      const ladleBowl = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.16, 0.12, 0.22, 14),
+        ironDark
+      );
+      ladleBowl.position.set(W/2 - 0.4 - 0.13, 1.7, -1.0);
+      scene.add(ladleBowl);
+
+      // a heap of charcoal/coke chunks near the front
+      const cokeMat = new THREE.MeshStandardMaterial({
+        color: 0x141008, roughness: 1.0, emissive: 0x3a1006, emissiveIntensity: 0.4
+      });
+      for (let i = 0; i < 12; i++) {
+        const ch = new THREE.Mesh(
+          new THREE.BoxGeometry(0.12 + Math.random()*0.1, 0.1, 0.1 + Math.random()*0.08),
+          cokeMat
+        );
+        ch.position.set(-1.4 + (Math.random() - 0.5) * 0.7, 0.05, 2.0 + (Math.random() - 0.5) * 0.7);
+        ch.rotation.y = Math.random() * Math.PI;
+        scene.add(ch);
+      }
+
+      // whiteboard — etched slate plaque on the front (firebrick) wall
+      const wb = makePlaceholderWhiteboard({
+        width: 2.6, height: 1.6,
+        color: 0x2a2218, emissive: 0x140c06, frameColor: 0x141008
+      });
+      wb.position.set(W/2 - 1.8, 1.8, -D/2 + 0.04);
+      wb.userData.boardKind = 'iron-framed-slate';
+      // little iron pegs that hold the slate against the wall
+      const pegMat = new THREE.MeshStandardMaterial({ color: 0x141008, roughness: 0.6, metalness: 0.7 });
+      for (const [sx, sy] of [[-1.3, 0.75], [1.3, 0.75], [-1.3, -0.75], [1.3, -0.75]]) {
+        const peg = new THREE.Mesh(new THREE.CylinderGeometry(0.04, 0.04, 0.05, 10), pegMat);
+        peg.rotation.x = Math.PI / 2;
+        peg.position.set(sx, sy, 0.03);
+        wb.add(peg);
+      }
+      scene.add(wb);
+
+      const backDoor = buildBackDoor(D, shared.doorWood);
+      scene.add(backDoor);
+
+      return {
+        scene, width: W, depth: D, height: H,
+        backDoor, whiteboard: wb,
+        entryYaw: 0,
+        doors: [backDoor]
+      };
+    }
+    ROOM_BUILDERS['foundry'] = buildFoundry;
+
+    // ----------------------------------------------------------------
+    // FURNISHED: glassblowing-studio
+    //   k-pdf -> firebrick walls, steel marver, slate floor, glory hole
+    //   furnace, glass rods, finished pieces. Heat-tempered glass
+    //   surface for the whiteboard (etched-glass theme).
+    // ----------------------------------------------------------------
+    function buildGlassblowingStudio(project, roomTypeId, shared) {
+      const slate = plasterTexture({ base: '#4a4640', noise: 18 });
+      slate.repeat.set(3, 3);
+      const floorMat = new THREE.MeshStandardMaterial({
+        map: slate, color: 0x5a564e, roughness: 0.85
+      });
+      const firebrick = brickTexture({
+        size: 512, brickW: 80, brickH: 28,
+        mortar: '#3a281c', baseR: 168, baseG: 110, baseB: 70, jitter: 22
+      });
+      firebrick.repeat.set(2.5, 1.4);
+      const wallMat = new THREE.MeshStandardMaterial({
+        map: firebrick, color: 0xb88860, roughness: 0.95
+      });
+      const ceilingMat = new THREE.MeshStandardMaterial({ color: 0x1a1410, roughness: 1.0 });
+
+      const shell = makeRoomShell({
+        width: 7.0, depth: 6.5, height: 3.8,
+        floorMaterial: floorMat, ceilingMaterial: ceilingMat,
+        wallFront: wallMat, wallBack: wallMat, wallLeft: wallMat, wallRight: wallMat,
+        fogColor: 0x281408, fogNear: 5, fogFar: 20
+      });
+      const scene = shell.scene;
+      const W = shell.width, D = shell.depth, H = shell.height;
+
+      // a low warm ambient + a touch of cool
+      scene.add(new THREE.AmbientLight(0x402818, 0.55));
+      scene.add(new THREE.HemisphereLight(0x6a5040, 0x1a0e06, 0.3));
+
+      // ------- glory hole furnace on the left side -------
+      // a brick block with a single brightly-glowing horizontal opening
+      const ghBody = new THREE.Mesh(
+        new THREE.BoxGeometry(1.4, 1.4, 1.4),
+        new THREE.MeshStandardMaterial({ map: firebrick.clone(), color: 0x8a6048, roughness: 0.95 })
+      );
+      ghBody.position.set(-W/2 + 1.0, 0.7, 0.0);
+      scene.add(ghBody);
+      // dark mouth surround
+      const ghMouth = new THREE.Mesh(
+        new THREE.BoxGeometry(0.7, 0.5, 0.05),
+        new THREE.MeshStandardMaterial({ color: 0x080604, roughness: 1.0 })
+      );
+      ghMouth.position.set(-W/2 + 1.0 + 0.71, 0.85, 0.0);
+      ghMouth.rotation.y = Math.PI / 2;
+      scene.add(ghMouth);
+      // the actual glow inside the mouth
+      const ghFire = new THREE.Mesh(
+        new THREE.PlaneGeometry(0.55, 0.35),
+        new THREE.MeshBasicMaterial({ color: 0xfff0a0 })
+      );
+      ghFire.position.set(-W/2 + 1.0 + 0.74, 0.85, 0.0);
+      ghFire.rotation.y = Math.PI / 2;
+      scene.add(ghFire);
+      // dominant orange light source pouring out
+      const ghLight = new THREE.SpotLight(0xff8030, 7.5, 10, Math.PI/3.5, 0.7, 1.4);
+      ghLight.position.set(-W/2 + 1.0 + 0.7, 0.85, 0.0);
+      ghLight.target.position.set(W/2, 0.5, 0.0);
+      scene.add(ghLight); scene.add(ghLight.target);
+      // a soft warm fill in the room
+      const ghFill = new THREE.PointLight(0xff6020, 1.6, 8, 1.7);
+      ghFill.position.set(-W/2 + 2.0, 1.4, 0);
+      scene.add(ghFill);
+      // tiny chimney up top
+      const ghStack = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.16, 0.16, 1.0, 14),
+        new THREE.MeshStandardMaterial({ color: 0x141008, roughness: 0.8, metalness: 0.4 })
+      );
+      ghStack.position.set(-W/2 + 1.0, 1.9, 0.0);
+      scene.add(ghStack);
+
+      // ------- marver table — heavy polished steel slab -------
+      const marverSteel = new THREE.MeshStandardMaterial({
+        color: 0x868a90, roughness: 0.18, metalness: 0.95
+      });
+      const marverFrame = new THREE.MeshStandardMaterial({
+        color: 0x202428, roughness: 0.7, metalness: 0.6
+      });
+      const marverTop = new THREE.Mesh(new THREE.BoxGeometry(1.8, 0.06, 0.9), marverSteel);
+      marverTop.position.set(0.6, 0.94, 0.4);
+      scene.add(marverTop);
+      // four legs
+      const legGeo = new THREE.BoxGeometry(0.08, 0.91, 0.08);
+      for (const [dx, dz] of [[-0.82, -0.4], [0.82, -0.4], [-0.82, 0.4], [0.82, 0.4]]) {
+        const leg = new THREE.Mesh(legGeo, marverFrame);
+        leg.position.set(0.6 + dx, 0.46, 0.4 + dz);
+        scene.add(leg);
+      }
+      // a partial glass blob in progress on the marver — orange emissive
+      const inProgress = new THREE.Mesh(
+        new THREE.SphereGeometry(0.16, 18, 12),
+        new THREE.MeshStandardMaterial({
+          color: 0xffa040, roughness: 0.2, metalness: 0.0,
+          emissive: 0xff7028, emissiveIntensity: 0.7
+        })
+      );
+      inProgress.position.set(0.6, 1.13, 0.4);
+      scene.add(inProgress);
+      // pipe sticking out of it
+      const blowPipe = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.03, 0.03, 1.3, 12),
+        marverFrame
+      );
+      blowPipe.position.set(0.0, 1.13, 0.4);
+      blowPipe.rotation.z = Math.PI / 2;
+      scene.add(blowPipe);
+
+      // ------- glass rods leaning against the right wall in a rack -------
+      const rackMat = new THREE.MeshStandardMaterial({ color: 0x2a1f18, roughness: 0.9 });
+      const rack = new THREE.Mesh(new THREE.BoxGeometry(0.18, 1.6, 0.1), rackMat);
+      rack.position.set(W/2 - 0.18, 0.8, -1.4);
+      scene.add(rack);
+      const glassColors = [0x4070c8, 0xc04060, 0x40a868, 0xb8a040, 0x9050c0, 0xc05030];
+      for (let i = 0; i < 8; i++) {
+        const c = glassColors[i % glassColors.length];
+        const rod = new THREE.Mesh(
+          new THREE.CylinderGeometry(0.02, 0.02, 1.6, 10),
+          new THREE.MeshStandardMaterial({
+            color: c, roughness: 0.2, metalness: 0.0,
+            emissive: c, emissiveIntensity: 0.18
+          })
+        );
+        rod.position.set(W/2 - 0.18 - 0.05 + (i % 2) * 0.03, 0.8, -1.4 + (i - 3.5) * 0.07);
+        rod.rotation.x = (Math.random() - 0.5) * 0.1;
+        scene.add(rod);
+      }
+
+      // ------- a finished vase on a display stand near the front -------
+      const standMat = new THREE.MeshStandardMaterial({ color: 0x141008, roughness: 0.9 });
+      const standCol = new THREE.Mesh(new THREE.CylinderGeometry(0.18, 0.22, 0.8, 16), standMat);
+      standCol.position.set(W/2 - 1.8, 0.4, 1.8);
+      scene.add(standCol);
+      const vase = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.16, 0.22, 0.45, 20),
+        new THREE.MeshStandardMaterial({
+          color: 0x4080c8, roughness: 0.15, metalness: 0.1,
+          emissive: 0x2050a0, emissiveIntensity: 0.4
+        })
+      );
+      vase.position.set(W/2 - 1.8, 1.025, 1.8);
+      scene.add(vase);
+      // accent light on the vase to catch its color
+      const vaseLight = new THREE.PointLight(0x80a0ff, 0.6, 2.5, 1.7);
+      vaseLight.position.set(W/2 - 1.8, 1.4, 1.8);
+      scene.add(vaseLight);
+
+      // ------- heat-tempered glass whiteboard on the front wall -------
+      const wb = makePlaceholderWhiteboard({
+        width: 2.8, height: 1.7,
+        color: 0xb8c8cc, emissive: 0x405860, frameColor: 0x101418
+      });
+      wb.position.set(0, 1.7, -D/2 + 0.04);
+      wb.userData.boardKind = 'etched-glass';
+      scene.add(wb);
+
+      const backDoor = buildBackDoor(D, shared.doorWood);
+      scene.add(backDoor);
+
+      return {
+        scene, width: W, depth: D, height: H,
+        backDoor, whiteboard: wb,
+        entryYaw: 0,
+        doors: [backDoor]
+      };
+    }
+    ROOM_BUILDERS['glassblowing-studio'] = buildGlassblowingStudio;
+
+    // ----------------------------------------------------------------
+    // FURNISHED: radio-station
+    //   meshscope -> walnut paneling, brushed aluminum, tube glow,
+    //   broadcast console, microphone, vinyl, glowing VU meters.
+    //   Backlit-acrylic whiteboard.
+    // ----------------------------------------------------------------
+    function buildRadioStation(project, roomTypeId, shared) {
+      const walnut = woodTexture({ base: '#3a2010', dark: '#180a04', stripes: 9 });
+      walnut.repeat.set(2, 1.3);
+      const wallMat = new THREE.MeshStandardMaterial({
+        map: walnut, color: 0x5a3018, roughness: 0.6, metalness: 0.15
+      });
+      const carpet = plasterTexture({ base: '#1a1410', noise: 12 });
+      carpet.repeat.set(2, 2);
+      const floorMat = new THREE.MeshStandardMaterial({
+        map: carpet, color: 0x201810, roughness: 1.0
+      });
+      const ceilingMat = new THREE.MeshStandardMaterial({
+        color: 0x141008, roughness: 1.0
+      });
+
+      const shell = makeRoomShell({
+        width: 7.0, depth: 6.0, height: 3.6,
+        floorMaterial: floorMat, ceilingMaterial: ceilingMat,
+        wallFront: wallMat, wallBack: wallMat, wallLeft: wallMat, wallRight: wallMat,
+        fogColor: 0x100a06, fogNear: 4, fogFar: 16
+      });
+      const scene = shell.scene;
+      const W = shell.width, D = shell.depth, H = shell.height;
+
+      // a low warm ambient + warm pendant; console glow is the star
+      scene.add(new THREE.AmbientLight(0x3a2818, 0.55));
+      scene.add(new THREE.HemisphereLight(0x6a4830, 0x0a0604, 0.3));
+
+      // warm pendant
+      const pendantBulb = new THREE.Mesh(
+        new THREE.SphereGeometry(0.1, 14, 10),
+        new THREE.MeshBasicMaterial({ color: 0xffd49a })
+      );
+      pendantBulb.position.set(0, H - 0.7, -0.4);
+      scene.add(pendantBulb);
+      const pendantLight = new THREE.PointLight(0xffb070, 3.2, 12, 1.5);
+      pendantLight.position.set(0, H - 0.7, -0.4);
+      scene.add(pendantLight);
+      const cord = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.02, 0.02, 0.6, 8),
+        new THREE.MeshStandardMaterial({ color: 0x1a1108, roughness: 1.0 })
+      );
+      cord.position.set(0, H - 0.4, -0.4);
+      scene.add(cord);
+
+      // ------- broadcast console -------
+      // an L-shaped desk: front face wider, with knobs and meters.
+      const aluminum = new THREE.MeshStandardMaterial({
+        color: 0x9ca0a4, roughness: 0.35, metalness: 0.85
+      });
+      const darkPanel = new THREE.MeshStandardMaterial({
+        color: 0x181612, roughness: 0.7, metalness: 0.45
+      });
+      // Offset the console slightly left so the whiteboard (placed
+      // right-of-center on the front wall) stays on a clear sightline
+      // from the arrival camera at x=0.
+      const consoleGroup = new THREE.Group();
+      consoleGroup.position.set(-0.8, 0, 0.8);
+      // base
+      const baseDesk = new THREE.Mesh(new THREE.BoxGeometry(3.6, 0.8, 1.0), darkPanel);
+      baseDesk.position.set(0, 0.4, 0);
+      consoleGroup.add(baseDesk);
+      // sloping front panel where the meters live
+      const slant = new THREE.Mesh(new THREE.BoxGeometry(3.6, 0.7, 0.06), aluminum);
+      slant.position.set(0, 0.95, -0.4);
+      slant.rotation.x = -Math.PI / 8;
+      consoleGroup.add(slant);
+      // VU meters on the slant — three of them, glowing amber
+      const meterMat = new THREE.MeshBasicMaterial({ color: 0xffc858 });
+      for (let i = 0; i < 3; i++) {
+        const x = (i - 1) * 0.9;
+        // bezel
+        const bezel = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.32, 0.04), darkPanel);
+        bezel.position.set(x, 0.95, -0.36);
+        bezel.rotation.x = -Math.PI / 8;
+        consoleGroup.add(bezel);
+        const face = new THREE.Mesh(new THREE.PlaneGeometry(0.42, 0.24), meterMat);
+        face.position.set(x, 0.97, -0.34);
+        face.rotation.x = -Math.PI / 8;
+        consoleGroup.add(face);
+        // needle (thin line)
+        const needle = new THREE.Mesh(
+          new THREE.BoxGeometry(0.012, 0.18, 0.005),
+          new THREE.MeshBasicMaterial({ color: 0x180c00 })
+        );
+        needle.position.set(x, 0.97, -0.32);
+        needle.rotation.x = -Math.PI / 8;
+        needle.rotation.z = (i - 1) * 0.4;
+        consoleGroup.add(needle);
+      }
+      // knob row along the top
+      const knobMat = new THREE.MeshStandardMaterial({
+        color: 0xc0c4c8, roughness: 0.4, metalness: 0.8
+      });
+      for (let i = 0; i < 12; i++) {
+        const x = (i - 5.5) * 0.27;
+        const knob = new THREE.Mesh(
+          new THREE.CylinderGeometry(0.06, 0.07, 0.06, 16),
+          knobMat
+        );
+        knob.position.set(x, 0.82, 0.4);
+        consoleGroup.add(knob);
+        // colored indicator on top
+        const dot = new THREE.Mesh(
+          new THREE.CircleGeometry(0.012, 12),
+          new THREE.MeshBasicMaterial({ color: 0xff8030 })
+        );
+        dot.rotation.x = -Math.PI / 2;
+        dot.position.set(x, 0.85, 0.4);
+        consoleGroup.add(dot);
+      }
+      // fader strip
+      const faderTrack = new THREE.Mesh(new THREE.BoxGeometry(2.6, 0.04, 0.16), aluminum);
+      faderTrack.position.set(0, 0.81, 0.12);
+      consoleGroup.add(faderTrack);
+      for (let i = 0; i < 8; i++) {
+        const x = (i - 3.5) * 0.32;
+        const fader = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.06, 0.10), darkPanel);
+        fader.position.set(x, 0.84, 0.12);
+        consoleGroup.add(fader);
+      }
+      scene.add(consoleGroup);
+
+      // a subtle amber console-glow point light just above the slant
+      const consoleGlow = new THREE.PointLight(0xffb058, 0.9, 3, 1.7);
+      consoleGlow.position.set(-0.8, 1.1, 0.4);
+      scene.add(consoleGlow);
+
+      // ------- condenser microphone on a boom arm -------
+      const boomMat = new THREE.MeshStandardMaterial({
+        color: 0x222628, roughness: 0.55, metalness: 0.75
+      });
+      const boomBase = new THREE.Mesh(new THREE.CylinderGeometry(0.08, 0.1, 0.06, 16), boomMat);
+      boomBase.position.set(-0.8, 0.83, 0.8);
+      scene.add(boomBase);
+      const boomArm1 = new THREE.Mesh(new THREE.CylinderGeometry(0.02, 0.02, 0.7, 10), boomMat);
+      boomArm1.position.set(-0.8, 1.18, 0.8);
+      scene.add(boomArm1);
+      const boomArm2 = new THREE.Mesh(new THREE.CylinderGeometry(0.02, 0.02, 0.8, 10), boomMat);
+      boomArm2.position.set(-0.8, 1.55, 0.55);
+      boomArm2.rotation.x = Math.PI / 3;
+      scene.add(boomArm2);
+      // mic body
+      const micBody = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.06, 0.06, 0.18, 14),
+        new THREE.MeshStandardMaterial({ color: 0x141618, roughness: 0.45, metalness: 0.8 })
+      );
+      micBody.position.set(-0.8, 1.78, 0.32);
+      scene.add(micBody);
+      // mic grille (mesh sphere)
+      const micGrille = new THREE.Mesh(
+        new THREE.SphereGeometry(0.075, 16, 12),
+        new THREE.MeshStandardMaterial({ color: 0x868a90, roughness: 0.5, metalness: 0.8,
+          emissive: 0x2a1006, emissiveIntensity: 0.2 })
+      );
+      micGrille.position.set(-0.8, 1.92, 0.32);
+      scene.add(micGrille);
+
+      // ------- vinyl record on a turntable to the side -------
+      const tt = new THREE.Mesh(new THREE.CylinderGeometry(0.45, 0.45, 0.04, 32), darkPanel);
+      tt.position.set(-W/2 + 1.0, 0.94, -1.5);
+      scene.add(tt);
+      const platter = new THREE.Mesh(new THREE.CylinderGeometry(0.38, 0.38, 0.02, 32), aluminum);
+      platter.position.set(-W/2 + 1.0, 0.96, -1.5);
+      scene.add(platter);
+      const vinyl = new THREE.Mesh(
+        new THREE.CircleGeometry(0.36, 48),
+        new THREE.MeshStandardMaterial({ color: 0x080604, roughness: 0.4, metalness: 0.2 })
+      );
+      vinyl.rotation.x = -Math.PI / 2;
+      vinyl.position.set(-W/2 + 1.0, 0.975, -1.5);
+      scene.add(vinyl);
+      // label
+      const label = new THREE.Mesh(
+        new THREE.CircleGeometry(0.1, 24),
+        new THREE.MeshBasicMaterial({ color: 0xc04030 })
+      );
+      label.rotation.x = -Math.PI / 2;
+      label.position.set(-W/2 + 1.0, 0.978, -1.5);
+      scene.add(label);
+      // tonearm
+      const tonearmBase = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.05, 0.06, 12), aluminum);
+      tonearmBase.position.set(-W/2 + 1.35, 0.99, -1.85);
+      scene.add(tonearmBase);
+      const tonearm = new THREE.Mesh(new THREE.CylinderGeometry(0.012, 0.012, 0.5, 10), aluminum);
+      tonearm.position.set(-W/2 + 1.15, 1.01, -1.65);
+      tonearm.rotation.x = Math.PI / 2;
+      tonearm.rotation.z = Math.PI / 4;
+      scene.add(tonearm);
+
+      // ------- ON-AIR sign above the front wall -------
+      const onAirHousing = new THREE.Mesh(
+        new THREE.BoxGeometry(1.0, 0.32, 0.1),
+        darkPanel
+      );
+      onAirHousing.position.set(-W/2 + 1.2, 2.6, -D/2 + 0.1);
+      scene.add(onAirHousing);
+      const onAirText = new THREE.Mesh(
+        new THREE.PlaneGeometry(0.85, 0.22),
+        new THREE.MeshBasicMaterial({ color: 0xff5040 })
+      );
+      onAirText.position.set(-W/2 + 1.2, 2.6, -D/2 + 0.16);
+      scene.add(onAirText);
+      const onAirGlow = new THREE.PointLight(0xff5040, 0.4, 1.6, 1.8);
+      onAirGlow.position.set(-W/2 + 1.2, 2.6, -D/2 + 0.4);
+      scene.add(onAirGlow);
+
+      // ------- backlit-acrylic whiteboard on the front wall -------
+      const wb = makePlaceholderWhiteboard({
+        width: 2.8, height: 1.6,
+        color: 0x16191e, emissive: 0xc08030, frameColor: 0x080808
+      });
+      wb.position.set(0.6, 1.7, -D/2 + 0.04);
+      wb.userData.boardKind = 'backlit-acrylic';
+      // a subtle warm edge backlight — two small emissive strips above/below
+      const stripMat = new THREE.MeshBasicMaterial({ color: 0xffa050 });
+      const topStrip = new THREE.Mesh(new THREE.PlaneGeometry(2.84, 0.04), stripMat);
+      topStrip.position.set(0, 0.88, 0.015);
+      wb.add(topStrip);
+      const botStrip = topStrip.clone();
+      botStrip.position.set(0, -0.88, 0.015);
+      wb.add(botStrip);
+      scene.add(wb);
+
+      const backDoor = buildBackDoor(D, shared.doorWood);
+      scene.add(backDoor);
+
+      return {
+        scene, width: W, depth: D, height: H,
+        backDoor, whiteboard: wb,
+        entryYaw: 0,
+        doors: [backDoor]
+      };
+    }
+    ROOM_BUILDERS['radio-station'] = buildRadioStation;
+
+    // ----------------------------------------------------------------
+    // FURNISHED: textile-loom-room
+    //   karlban + ferrum-corde-llc -> pine plank floor, white plaster
+    //   walls, floor loom, yarn spools, woven samples. Window daylight
+    //   + warm task. Tapestry-framed whiteboard.
+    // ----------------------------------------------------------------
+    function buildTextileLoomRoom(project, roomTypeId, shared) {
+      const pine = woodTexture({ base: '#c89860', dark: '#7a4828', stripes: 12 });
+      pine.repeat.set(3, 3);
+      const floorMat = new THREE.MeshStandardMaterial({
+        map: pine, color: 0xd0a878, roughness: 0.8
+      });
+      const plaster = plasterTexture({ base: '#f0e8d4', noise: 8 });
+      plaster.repeat.set(2, 1.2);
+      const wallMat = new THREE.MeshStandardMaterial({
+        map: plaster, color: 0xe8e0c8, roughness: 1.0,
+        emissive: 0x504030, emissiveIntensity: 0.2
+      });
+      const ceilingMat = new THREE.MeshStandardMaterial({
+        color: 0xf2eadd, roughness: 1.0, emissive: 0xb09878, emissiveIntensity: 0.5
+      });
+
+      const shell = makeRoomShell({
+        width: 7.0, depth: 6.5, height: 3.8,
+        floorMaterial: floorMat, ceilingMaterial: ceilingMat,
+        wallFront: wallMat, wallBack: wallMat, wallLeft: wallMat, wallRight: wallMat,
+        fogColor: 0xd8c8a8, fogNear: 6, fogFar: 22
+      });
+      const scene = shell.scene;
+      const W = shell.width, D = shell.depth, H = shell.height;
+
+      // bright daylight + warm fill
+      scene.add(new THREE.HemisphereLight(0xfff4d8, 0x6a4830, 0.95));
+      scene.add(new THREE.AmbientLight(0xfff0d0, 0.5));
+      const winLight = new THREE.DirectionalLight(0xfff4c8, 0.85);
+      winLight.position.set(3, 5, -1);
+      scene.add(winLight);
+
+      // a small warm task lamp on a shelf for visual contrast
+      const warmTask = new THREE.PointLight(0xffc880, 1.2, 4, 1.7);
+      warmTask.position.set(-W/2 + 1.0, 1.6, -1.8);
+      scene.add(warmTask);
+
+      // ------- floor loom in the center -------
+      const oak = new THREE.MeshStandardMaterial({ color: 0x6a4322, roughness: 0.9 });
+      const oakLight = new THREE.MeshStandardMaterial({ color: 0x8a5a30, roughness: 0.9 });
+      const loomGroup = new THREE.Group();
+      // Offset the loom slightly right so it doesn't block the
+      // sightline from the arrival camera (centered at x=0) to the
+      // tapestry whiteboard on the front wall.
+      loomGroup.position.set(1.4, 0, 0.4);
+      // four vertical posts forming a rectangular frame
+      const postGeo = new THREE.BoxGeometry(0.1, 2.0, 0.1);
+      const corners = [[-0.85, -0.55], [0.85, -0.55], [-0.85, 0.55], [0.85, 0.55]];
+      for (const [x, z] of corners) {
+        const p = new THREE.Mesh(postGeo, oak);
+        p.position.set(x, 1.0, z);
+        loomGroup.add(p);
+      }
+      // top rails (front/back) — where the warp beam sits
+      const topRailX = new THREE.BoxGeometry(1.8, 0.1, 0.1);
+      for (const z of [-0.55, 0.55]) {
+        const r = new THREE.Mesh(topRailX, oak);
+        r.position.set(0, 2.0, z);
+        loomGroup.add(r);
+      }
+      // bottom rails
+      for (const z of [-0.55, 0.55]) {
+        const r = new THREE.Mesh(topRailX, oak);
+        r.position.set(0, 0.18, z);
+        loomGroup.add(r);
+      }
+      // warp beam (a thicker rod at the back)
+      const warpBeam = new THREE.Mesh(new THREE.CylinderGeometry(0.1, 0.1, 1.65, 14), oakLight);
+      warpBeam.rotation.z = Math.PI / 2;
+      warpBeam.position.set(0, 1.85, -0.55);
+      loomGroup.add(warpBeam);
+      // cloth beam at the front
+      const clothBeam = warpBeam.clone();
+      clothBeam.position.set(0, 0.6, 0.55);
+      loomGroup.add(clothBeam);
+      // warp threads — vertical strings from warp beam down to cloth beam
+      const threadMat = new THREE.MeshStandardMaterial({ color: 0xc8b890, roughness: 0.95 });
+      for (let i = 0; i < 24; i++) {
+        const x = (i - 11.5) * 0.07;
+        // thread runs at a slight forward slope from warp (top-back) to cloth (lower-front)
+        const thread = new THREE.Mesh(new THREE.CylinderGeometry(0.005, 0.005, 1.5, 6), threadMat);
+        thread.position.set(x, 1.225, 0);
+        thread.rotation.x = Math.atan2(1.25, 1.1);
+        loomGroup.add(thread);
+      }
+      // in-progress woven cloth at the front (a horizontal panel)
+      const clothMat = new THREE.MeshStandardMaterial({
+        color: 0xa84030, roughness: 0.9, side: THREE.DoubleSide
+      });
+      const cloth = new THREE.Mesh(new THREE.PlaneGeometry(1.6, 0.5), clothMat);
+      cloth.position.set(0, 0.85, 0.45);
+      cloth.rotation.x = -Math.PI / 5;
+      loomGroup.add(cloth);
+      // pedals on the floor in front of the loom
+      const pedalMat = new THREE.MeshStandardMaterial({ color: 0x4a2a14, roughness: 0.95 });
+      for (let i = 0; i < 4; i++) {
+        const pedal = new THREE.Mesh(new THREE.BoxGeometry(0.55, 0.04, 0.12), pedalMat);
+        pedal.position.set(0, 0.06, 0.95 + i * 0.16);
+        loomGroup.add(pedal);
+      }
+      // bench in front
+      const bench = new THREE.Mesh(new THREE.BoxGeometry(1.4, 0.06, 0.32), oak);
+      bench.position.set(0, 0.55, 1.55);
+      loomGroup.add(bench);
+      const benchLegGeo = new THREE.BoxGeometry(0.05, 0.5, 0.05);
+      for (const [bx, bz] of [[-0.6, 1.4], [0.6, 1.4], [-0.6, 1.7], [0.6, 1.7]]) {
+        const l = new THREE.Mesh(benchLegGeo, oak);
+        l.position.set(bx, 0.27, bz);
+        loomGroup.add(l);
+      }
+      scene.add(loomGroup);
+
+      // ------- yarn spool basket on the left side -------
+      const basketMat = new THREE.MeshStandardMaterial({ color: 0x8a6228, roughness: 0.95 });
+      const basket = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.42, 0.36, 0.34, 16, 1, true),
+        basketMat
+      );
+      basket.material.side = THREE.DoubleSide;
+      basket.position.set(-W/2 + 1.0, 0.17, 1.4);
+      scene.add(basket);
+      // spools inside — colored balls
+      const yarnColors = [0xa04030, 0xc89a40, 0x2a6080, 0x408050, 0xb060a0, 0x6a3a80, 0xd0c890];
+      for (let i = 0; i < 8; i++) {
+        const c = yarnColors[i % yarnColors.length];
+        const ball = new THREE.Mesh(
+          new THREE.SphereGeometry(0.13 + Math.random()*0.02, 14, 10),
+          new THREE.MeshStandardMaterial({ color: c, roughness: 0.9 })
+        );
+        ball.position.set(-W/2 + 1.0 + (Math.random() - 0.5) * 0.4, 0.22 + (Math.random() * 0.2), 1.4 + (Math.random() - 0.5) * 0.4);
+        scene.add(ball);
+      }
+
+      // ------- shelving with stacked yarn cones -------
+      const shelfMat = new THREE.MeshStandardMaterial({ color: 0x6a4222, roughness: 0.95 });
+      const shelf = new THREE.Mesh(new THREE.BoxGeometry(0.34, 0.04, 1.6), shelfMat);
+      shelf.position.set(-W/2 + 0.22, 1.5, -1.8);
+      scene.add(shelf);
+      for (let i = 0; i < 5; i++) {
+        const c = yarnColors[(i + 2) % yarnColors.length];
+        const cone = new THREE.Mesh(
+          new THREE.CylinderGeometry(0.06, 0.11, 0.26, 14),
+          new THREE.MeshStandardMaterial({ color: c, roughness: 0.95 })
+        );
+        cone.position.set(-W/2 + 0.22, 1.65, -1.8 + (i - 2) * 0.3);
+        scene.add(cone);
+      }
+
+      // ------- woven samples hanging on the right wall -------
+      const sampleMats = [
+        new THREE.MeshStandardMaterial({ color: 0xa84030, roughness: 0.95, side: THREE.DoubleSide }),
+        new THREE.MeshStandardMaterial({ color: 0x40688a, roughness: 0.95, side: THREE.DoubleSide }),
+        new THREE.MeshStandardMaterial({ color: 0xc8a060, roughness: 0.95, side: THREE.DoubleSide })
+      ];
+      for (let i = 0; i < 3; i++) {
+        const samp = new THREE.Mesh(new THREE.PlaneGeometry(0.5, 0.85), sampleMats[i]);
+        samp.position.set(W/2 - 0.05, 1.8, -1.4 + i * 0.8);
+        samp.rotation.y = -Math.PI / 2;
+        scene.add(samp);
+        // wooden top rod
+        const rod = new THREE.Mesh(
+          new THREE.CylinderGeometry(0.018, 0.018, 0.6, 8),
+          oak
+        );
+        rod.rotation.x = Math.PI / 2;
+        rod.position.set(W/2 - 0.05, 2.22, -1.4 + i * 0.8);
+        scene.add(rod);
+      }
+
+      // ------- tapestry-themed whiteboard -------
+      const wb = makePlaceholderWhiteboard({
+        width: 2.6, height: 1.7,
+        color: 0xe8d4a8, emissive: 0x504028, frameColor: 0x3a1a14
+      });
+      wb.position.set(0, 1.85, -D/2 + 0.04);
+      wb.userData.boardKind = 'tapestry';
+      // add decorative tassels on bottom corners — tiny cylinders dangling
+      const tasselMat = new THREE.MeshStandardMaterial({ color: 0xc8a060, roughness: 0.95 });
+      for (const sx of [-1.4, 1.4]) {
+        const tas = new THREE.Mesh(new THREE.CylinderGeometry(0.025, 0.04, 0.18, 8), tasselMat);
+        tas.position.set(sx, -0.97, 0.02);
+        wb.add(tas);
+      }
+      scene.add(wb);
+
+      const backDoor = buildBackDoor(D, shared.doorWood);
+      scene.add(backDoor);
+
+      return {
+        scene, width: W, depth: D, height: H,
+        backDoor, whiteboard: wb,
+        entryYaw: 0,
+        doors: [backDoor]
+      };
+    }
+    ROOM_BUILDERS['textile-loom-room'] = buildTextileLoomRoom;
+
+    // ----------------------------------------------------------------
+    // FURNISHED: watchmaker-bench
+    //   reminder-app -> walnut paneling, small intimate room with a
+    //   white-matted bench, articulated bench lamp, brass tools,
+    //   loupe, tiny parts trays. Brass-plaque whiteboard.
+    // ----------------------------------------------------------------
+    function buildWatchmakerBench(project, roomTypeId, shared) {
+      const walnut = woodTexture({ base: '#3a2010', dark: '#180a04', stripes: 11 });
+      walnut.repeat.set(2, 1.2);
+      const wallMat = new THREE.MeshStandardMaterial({
+        map: walnut, color: 0x4a2818, roughness: 0.6, metalness: 0.1
+      });
+      const darkFloor = woodTexture({ base: '#241408', dark: '#0a0402', stripes: 9 });
+      darkFloor.repeat.set(2, 2);
+      const floorMat = new THREE.MeshStandardMaterial({
+        map: darkFloor, color: 0x382010, roughness: 0.85
+      });
+      const ceilingMat = new THREE.MeshStandardMaterial({
+        color: 0x1a0e06, roughness: 1.0
+      });
+
+      // smaller, more intimate dimensions
+      const shell = makeRoomShell({
+        width: 5.4, depth: 5.4, height: 3.4,
+        floorMaterial: floorMat, ceilingMaterial: ceilingMat,
+        wallFront: wallMat, wallBack: wallMat, wallLeft: wallMat, wallRight: wallMat,
+        fogColor: 0x0e0804, fogNear: 3, fogFar: 14
+      });
+      const scene = shell.scene;
+      const W = shell.width, D = shell.depth, H = shell.height;
+
+      // dim warm ambient
+      scene.add(new THREE.AmbientLight(0x3a2818, 0.5));
+      scene.add(new THREE.HemisphereLight(0x6a4828, 0x0a0604, 0.25));
+
+      // ------- the bench against the front wall -------
+      const benchTopMat = new THREE.MeshStandardMaterial({
+        map: walnut, color: 0x6a3a1c, roughness: 0.55, metalness: 0.1
+      });
+      const benchTop = new THREE.Mesh(new THREE.BoxGeometry(3.0, 0.06, 0.85), benchTopMat);
+      benchTop.position.set(0, 0.92, -D/2 + 0.6);
+      scene.add(benchTop);
+      // legs
+      const legMat = new THREE.MeshStandardMaterial({ color: 0x241408, roughness: 0.9 });
+      for (const [bx, bz] of [[-1.4, -0.4], [1.4, -0.4], [-1.4, 0.4], [1.4, 0.4]]) {
+        const leg = new THREE.Mesh(new THREE.BoxGeometry(0.07, 0.92, 0.07), legMat);
+        leg.position.set(bx, 0.46, -D/2 + 0.6 + bz);
+        scene.add(leg);
+      }
+      // white work mat in the middle of the bench
+      const matMat = new THREE.MeshStandardMaterial({
+        color: 0xf2ecd8, roughness: 0.7, metalness: 0.02,
+        emissive: 0x281a08, emissiveIntensity: 0.1
+      });
+      const mat = new THREE.Mesh(new THREE.BoxGeometry(1.4, 0.01, 0.7), matMat);
+      mat.position.set(0, 0.955, -D/2 + 0.6);
+      scene.add(mat);
+
+      // ------- articulated bench lamp -------
+      const lampDark = new THREE.MeshStandardMaterial({ color: 0x141008, roughness: 0.6, metalness: 0.55 });
+      const lampBrass = new THREE.MeshStandardMaterial({ color: 0xb88838, roughness: 0.4, metalness: 0.85 });
+      // base clamp
+      const lampBase = new THREE.Mesh(new THREE.CylinderGeometry(0.07, 0.09, 0.05, 14), lampDark);
+      lampBase.position.set(-1.0, 0.97, -D/2 + 0.55);
+      scene.add(lampBase);
+      // first arm
+      const arm1 = new THREE.Mesh(new THREE.CylinderGeometry(0.022, 0.022, 0.45, 10), lampDark);
+      arm1.position.set(-1.0, 1.17, -D/2 + 0.55);
+      scene.add(arm1);
+      // pivot
+      const pivot1 = new THREE.Mesh(new THREE.SphereGeometry(0.045, 12, 8), lampBrass);
+      pivot1.position.set(-1.0, 1.39, -D/2 + 0.55);
+      scene.add(pivot1);
+      // second arm angling forward over the mat
+      const arm2 = new THREE.Mesh(new THREE.CylinderGeometry(0.022, 0.022, 0.55, 10), lampDark);
+      arm2.position.set(-0.7, 1.35, -D/2 + 0.7);
+      arm2.rotation.z = -Math.PI / 3;
+      arm2.rotation.y = Math.PI / 6;
+      scene.add(arm2);
+      // head
+      const lampHead = new THREE.Mesh(new THREE.ConeGeometry(0.1, 0.16, 14, 1, true), lampDark);
+      lampHead.material.side = THREE.DoubleSide;
+      lampHead.position.set(-0.3, 1.3, -D/2 + 0.85);
+      lampHead.rotation.x = Math.PI / 5;
+      scene.add(lampHead);
+      // the warm bench-lamp spotlight
+      const taskLight = new THREE.SpotLight(0xfff0c8, 4.0, 3.2, Math.PI/5.5, 0.45, 1.5);
+      taskLight.position.set(-0.3, 1.3, -D/2 + 0.85);
+      taskLight.target.position.set(0, 0.96, -D/2 + 0.6);
+      scene.add(taskLight); scene.add(taskLight.target);
+      // a small visible bulb at the head
+      const bulb = new THREE.Mesh(
+        new THREE.SphereGeometry(0.04, 12, 8),
+        new THREE.MeshBasicMaterial({ color: 0xfff0c0 })
+      );
+      bulb.position.set(-0.3, 1.27, -D/2 + 0.91);
+      scene.add(bulb);
+
+      // ------- the watch in progress on the mat -------
+      // a small disc movement with a couple of "wheels"
+      const movementMat = new THREE.MeshStandardMaterial({ color: 0xa88030, roughness: 0.35, metalness: 0.9 });
+      const movement = new THREE.Mesh(new THREE.CylinderGeometry(0.085, 0.085, 0.015, 24), movementMat);
+      movement.position.set(0, 0.965, -D/2 + 0.6);
+      scene.add(movement);
+      // little gears (tiny tori)
+      for (let i = 0; i < 4; i++) {
+        const gear = new THREE.Mesh(
+          new THREE.CylinderGeometry(0.018 + i * 0.005, 0.018 + i * 0.005, 0.006, 18),
+          movementMat
+        );
+        gear.position.set(-0.04 + i * 0.025, 0.972, -D/2 + 0.59 + (i % 2) * 0.02);
+        scene.add(gear);
+      }
+
+      // ------- loupe stand on the right of the mat -------
+      const loupePost = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.02, 0.022, 0.42, 10),
+        lampBrass
+      );
+      loupePost.position.set(0.8, 1.16, -D/2 + 0.55);
+      scene.add(loupePost);
+      const loupeRing = new THREE.Mesh(
+        new THREE.TorusGeometry(0.08, 0.018, 10, 24),
+        lampBrass
+      );
+      loupeRing.position.set(0.8, 1.37, -D/2 + 0.55);
+      loupeRing.rotation.x = Math.PI / 2;
+      scene.add(loupeRing);
+      const lens = new THREE.Mesh(
+        new THREE.CircleGeometry(0.075, 24),
+        new THREE.MeshStandardMaterial({
+          color: 0x80b0c8, roughness: 0.1, metalness: 0.3,
+          transparent: true, opacity: 0.4
+        })
+      );
+      lens.position.set(0.8, 1.37, -D/2 + 0.55);
+      scene.add(lens);
+
+      // ------- parts trays — 3 tiny white squares to the right -------
+      const trayMat = new THREE.MeshStandardMaterial({ color: 0xf0eadc, roughness: 0.7 });
+      const trayLip = new THREE.MeshStandardMaterial({ color: 0x886c4a, roughness: 0.8 });
+      for (let i = 0; i < 3; i++) {
+        const z = -D/2 + 0.3 + i * 0.2;
+        const tray = new THREE.Mesh(new THREE.BoxGeometry(0.22, 0.02, 0.18), trayMat);
+        tray.position.set(1.25, 0.96, z);
+        scene.add(tray);
+        const lip = new THREE.Mesh(new THREE.BoxGeometry(0.24, 0.025, 0.005), trayLip);
+        lip.position.set(1.25, 0.97, z + 0.085);
+        scene.add(lip);
+        // tiny brass dot in the tray
+        const part = new THREE.Mesh(
+          new THREE.CylinderGeometry(0.012, 0.012, 0.003, 10),
+          movementMat
+        );
+        part.position.set(1.25, 0.974, z);
+        scene.add(part);
+      }
+
+      // ------- brass tool rack on the wall above the bench -------
+      const rackBoard = new THREE.Mesh(
+        new THREE.BoxGeometry(1.6, 0.18, 0.04),
+        new THREE.MeshStandardMaterial({ color: 0x241408, roughness: 0.9 })
+      );
+      rackBoard.position.set(0.4, 1.85, -D/2 + 0.06);
+      scene.add(rackBoard);
+      // tools hanging — tweezers + screwdrivers
+      for (let i = 0; i < 6; i++) {
+        const x = 0.4 + (i - 2.5) * 0.22;
+        const tool = new THREE.Mesh(
+          new THREE.CylinderGeometry(0.012, 0.012, 0.32, 8),
+          lampBrass
+        );
+        tool.position.set(x, 1.7, -D/2 + 0.04);
+        scene.add(tool);
+        // head (a small tip)
+        const tip = new THREE.Mesh(
+          new THREE.ConeGeometry(0.018, 0.04, 8),
+          new THREE.MeshStandardMaterial({ color: 0x8a6020, roughness: 0.55, metalness: 0.85 })
+        );
+        tip.position.set(x, 1.52, -D/2 + 0.04);
+        tip.rotation.x = Math.PI;
+        scene.add(tip);
+      }
+
+      // ------- engraved-brass-plaque whiteboard on the LEFT wall -------
+      // The bench is on the front wall, so put the whiteboard at a
+      // 90 degree turn for variety. We still want the camera-arrival
+      // pose to face it, so override entryYaw below.
+      const wb = makePlaceholderWhiteboard({
+        width: 2.4, height: 1.5,
+        color: 0xc89438, emissive: 0x4a3010, frameColor: 0x2a1a0a
+      });
+      wb.position.set(-W/2 + 0.04, 1.7, 0);
+      wb.rotation.y = Math.PI / 2;
+      wb.userData.boardKind = 'brass-plaque';
+      // four ornamental corner rosettes
+      const rosetteMat = new THREE.MeshStandardMaterial({ color: 0x8a6020, roughness: 0.4, metalness: 0.85 });
+      for (const [sx, sy] of [[-1.1, 0.65], [1.1, 0.65], [-1.1, -0.65], [1.1, -0.65]]) {
+        const ros = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.06, 0.02, 14), rosetteMat);
+        ros.rotation.x = Math.PI / 2;
+        ros.position.set(sx, sy, 0.03);
+        wb.add(ros);
+      }
+      scene.add(wb);
+
+      const backDoor = buildBackDoor(D, shared.doorWood);
+      scene.add(backDoor);
+
+      return {
+        scene, width: W, depth: D, height: H,
+        backDoor, whiteboard: wb,
+        // Camera entry pose: face the front-LEFT corner of the room
+        // so both the workbench (on the front wall) and the brass
+        // plaque (on the left wall) are in frame on arrival.
+        entryYaw: THREE.MathUtils.degToRad(-45),
+        doors: [backDoor]
+      };
+    }
+    ROOM_BUILDERS['watchmaker-bench'] = buildWatchmakerBench;
+
+    // ----------------------------------------------------------------
     // Whiteboard data rendering. Each furnished room declares a
     // boardKind (etched-glass / chalkboard / iron-framed-slate / ...);
     // we render the project record to a 2048x1280 canvas styled to
@@ -2334,6 +4150,62 @@ Out of scope for v1 (deferred)
         headingFont:'700 44px Georgia, serif',
         bodyFont:   '400 30px Georgia, serif',
         dateFont:   '700 28px Georgia, serif',
+        showFrameLine: true
+      },
+      'brass-plaque': {
+        bg: '#241710',
+        panel: '#c8943a',
+        text: '#1a0e04',
+        muted: '#5a3c14',
+        accent: '#7a5018',
+        warn: '#8a2010',
+        titleFont:  '700 78px "Baskerville", "Garamond", Georgia, serif',
+        subFont:    'italic 400 40px "Baskerville", Georgia, serif',
+        headingFont:'700 44px "Baskerville", Georgia, serif',
+        bodyFont:   '400 32px "Baskerville", Georgia, serif',
+        dateFont:   '700 30px "Baskerville", Georgia, serif',
+        showFrameLine: true
+      },
+      'steel-sheet': {
+        bg: '#1a1d20',
+        panel: '#c0c5c8',
+        text: '#0a0c0e',
+        muted: '#3a4248',
+        accent: '#206080',
+        warn: '#b03020',
+        titleFont:  '700 78px "SF Mono", "Menlo", "Consolas", monospace',
+        subFont:    '500 36px "SF Mono", "Menlo", monospace',
+        headingFont:'700 40px "SF Mono", "Menlo", monospace',
+        bodyFont:   '400 30px "SF Mono", "Menlo", monospace',
+        dateFont:   '700 28px "SF Mono", "Menlo", monospace',
+        showFrameLine: true
+      },
+      'backlit-acrylic': {
+        bg: '#0a0a0e',
+        panel: '#16191e',
+        text: '#f0d8a0',
+        muted: '#a07840',
+        accent: '#ffb858',
+        warn: '#ff5040',
+        titleFont:  '700 78px "Helvetica Neue", -apple-system, sans-serif',
+        subFont:    '300 40px "Helvetica Neue", -apple-system, sans-serif',
+        headingFont:'600 44px "Helvetica Neue", -apple-system, sans-serif',
+        bodyFont:   '400 32px "Helvetica Neue", -apple-system, sans-serif',
+        dateFont:   '700 30px "SF Mono", "Menlo", monospace',
+        showFrameLine: true
+      },
+      'tapestry': {
+        bg: '#3a1a14',
+        panel: '#e8d4a8',
+        text: '#3a1a14',
+        muted: '#7a4828',
+        accent: '#a04030',
+        warn: '#601810',
+        titleFont:  '700 78px Georgia, serif',
+        subFont:    'italic 400 38px Georgia, serif',
+        headingFont:'700 44px Georgia, serif',
+        bodyFont:   '400 32px Georgia, serif',
+        dateFont:   '700 30px Georgia, serif',
         showFrameLine: true
       },
       'default': {
@@ -2636,10 +4508,24 @@ Out of scope for v1 (deferred)
             midPos: door.userData.entryPosition.clone(),
             // door world position used as lookAt during approach
             doorWorld: door.getWorldPosition(new THREE.Vector3()),
-            // room arrival pose
+            // room arrival pose — start near the back wall (where the
+            // user steps through), slide forward toward the center.
+            // The lookAt direction is derived from the room's
+            // entryYaw so rooms whose whiteboard isn't on the front
+            // wall (e.g. watchmaker-bench, whiteboard on left wall)
+            // arrive already aimed at their data display.
             roomStartPos: new THREE.Vector3(0, 1.65, roomBuilt.depth / 2 - 0.4),
             roomEndPos:   new THREE.Vector3(0, 1.65, roomBuilt.depth / 2 - 1.0),
-            roomLookAt:   new THREE.Vector3(0, 1.65, -roomBuilt.depth / 2 + 0.4),
+            roomLookAt:   (() => {
+              const yaw = roomBuilt.entryYaw || 0;
+              const dist = Math.max(roomBuilt.width, roomBuilt.depth);
+              // controller-forward at yaw is (sin yaw, 0, -cos yaw)
+              return new THREE.Vector3(
+                0 + Math.sin(yaw) * dist,
+                1.65,
+                (roomBuilt.depth / 2 - 1.0) + (-Math.cos(yaw)) * dist
+              );
+            })(),
             resolve
           };
         });
