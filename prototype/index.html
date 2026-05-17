@@ -3666,6 +3666,206 @@ Out of scope for v1 (deferred)
     ROOM_BUILDERS['radio-station'] = buildRadioStation;
 
     // ----------------------------------------------------------------
+    // FURNISHED: textile-loom-room
+    //   karlban + ferrum-corde-llc -> pine plank floor, white plaster
+    //   walls, floor loom, yarn spools, woven samples. Window daylight
+    //   + warm task. Tapestry-framed whiteboard.
+    // ----------------------------------------------------------------
+    function buildTextileLoomRoom(project, roomTypeId, shared) {
+      const pine = woodTexture({ base: '#c89860', dark: '#7a4828', stripes: 12 });
+      pine.repeat.set(3, 3);
+      const floorMat = new THREE.MeshStandardMaterial({
+        map: pine, color: 0xd0a878, roughness: 0.8
+      });
+      const plaster = plasterTexture({ base: '#f0e8d4', noise: 8 });
+      plaster.repeat.set(2, 1.2);
+      const wallMat = new THREE.MeshStandardMaterial({
+        map: plaster, color: 0xe8e0c8, roughness: 1.0,
+        emissive: 0x504030, emissiveIntensity: 0.2
+      });
+      const ceilingMat = new THREE.MeshStandardMaterial({
+        color: 0xf2eadd, roughness: 1.0, emissive: 0xb09878, emissiveIntensity: 0.5
+      });
+
+      const shell = makeRoomShell({
+        width: 7.0, depth: 6.5, height: 3.8,
+        floorMaterial: floorMat, ceilingMaterial: ceilingMat,
+        wallFront: wallMat, wallBack: wallMat, wallLeft: wallMat, wallRight: wallMat,
+        fogColor: 0xd8c8a8, fogNear: 6, fogFar: 22
+      });
+      const scene = shell.scene;
+      const W = shell.width, D = shell.depth, H = shell.height;
+
+      // bright daylight + warm fill
+      scene.add(new THREE.HemisphereLight(0xfff4d8, 0x6a4830, 0.95));
+      scene.add(new THREE.AmbientLight(0xfff0d0, 0.5));
+      const winLight = new THREE.DirectionalLight(0xfff4c8, 0.85);
+      winLight.position.set(3, 5, -1);
+      scene.add(winLight);
+
+      // a small warm task lamp on a shelf for visual contrast
+      const warmTask = new THREE.PointLight(0xffc880, 1.2, 4, 1.7);
+      warmTask.position.set(-W/2 + 1.0, 1.6, -1.8);
+      scene.add(warmTask);
+
+      // ------- floor loom in the center -------
+      const oak = new THREE.MeshStandardMaterial({ color: 0x6a4322, roughness: 0.9 });
+      const oakLight = new THREE.MeshStandardMaterial({ color: 0x8a5a30, roughness: 0.9 });
+      const loomGroup = new THREE.Group();
+      loomGroup.position.set(0, 0, 0.4);
+      // four vertical posts forming a rectangular frame
+      const postGeo = new THREE.BoxGeometry(0.1, 2.0, 0.1);
+      const corners = [[-0.85, -0.55], [0.85, -0.55], [-0.85, 0.55], [0.85, 0.55]];
+      for (const [x, z] of corners) {
+        const p = new THREE.Mesh(postGeo, oak);
+        p.position.set(x, 1.0, z);
+        loomGroup.add(p);
+      }
+      // top rails (front/back) — where the warp beam sits
+      const topRailX = new THREE.BoxGeometry(1.8, 0.1, 0.1);
+      for (const z of [-0.55, 0.55]) {
+        const r = new THREE.Mesh(topRailX, oak);
+        r.position.set(0, 2.0, z);
+        loomGroup.add(r);
+      }
+      // bottom rails
+      for (const z of [-0.55, 0.55]) {
+        const r = new THREE.Mesh(topRailX, oak);
+        r.position.set(0, 0.18, z);
+        loomGroup.add(r);
+      }
+      // warp beam (a thicker rod at the back)
+      const warpBeam = new THREE.Mesh(new THREE.CylinderGeometry(0.1, 0.1, 1.65, 14), oakLight);
+      warpBeam.rotation.z = Math.PI / 2;
+      warpBeam.position.set(0, 1.85, -0.55);
+      loomGroup.add(warpBeam);
+      // cloth beam at the front
+      const clothBeam = warpBeam.clone();
+      clothBeam.position.set(0, 0.6, 0.55);
+      loomGroup.add(clothBeam);
+      // warp threads — vertical strings from warp beam down to cloth beam
+      const threadMat = new THREE.MeshStandardMaterial({ color: 0xc8b890, roughness: 0.95 });
+      for (let i = 0; i < 24; i++) {
+        const x = (i - 11.5) * 0.07;
+        // thread runs at a slight forward slope from warp (top-back) to cloth (lower-front)
+        const thread = new THREE.Mesh(new THREE.CylinderGeometry(0.005, 0.005, 1.5, 6), threadMat);
+        thread.position.set(x, 1.225, 0);
+        thread.rotation.x = Math.atan2(1.25, 1.1);
+        loomGroup.add(thread);
+      }
+      // in-progress woven cloth at the front (a horizontal panel)
+      const clothMat = new THREE.MeshStandardMaterial({
+        color: 0xa84030, roughness: 0.9, side: THREE.DoubleSide
+      });
+      const cloth = new THREE.Mesh(new THREE.PlaneGeometry(1.6, 0.5), clothMat);
+      cloth.position.set(0, 0.85, 0.45);
+      cloth.rotation.x = -Math.PI / 5;
+      loomGroup.add(cloth);
+      // pedals on the floor in front of the loom
+      const pedalMat = new THREE.MeshStandardMaterial({ color: 0x4a2a14, roughness: 0.95 });
+      for (let i = 0; i < 4; i++) {
+        const pedal = new THREE.Mesh(new THREE.BoxGeometry(0.55, 0.04, 0.12), pedalMat);
+        pedal.position.set(0, 0.06, 0.95 + i * 0.16);
+        loomGroup.add(pedal);
+      }
+      // bench in front
+      const bench = new THREE.Mesh(new THREE.BoxGeometry(1.4, 0.06, 0.32), oak);
+      bench.position.set(0, 0.55, 1.55);
+      loomGroup.add(bench);
+      const benchLegGeo = new THREE.BoxGeometry(0.05, 0.5, 0.05);
+      for (const [bx, bz] of [[-0.6, 1.4], [0.6, 1.4], [-0.6, 1.7], [0.6, 1.7]]) {
+        const l = new THREE.Mesh(benchLegGeo, oak);
+        l.position.set(bx, 0.27, bz);
+        loomGroup.add(l);
+      }
+      scene.add(loomGroup);
+
+      // ------- yarn spool basket on the left side -------
+      const basketMat = new THREE.MeshStandardMaterial({ color: 0x8a6228, roughness: 0.95 });
+      const basket = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.42, 0.36, 0.34, 16, 1, true),
+        basketMat
+      );
+      basket.material.side = THREE.DoubleSide;
+      basket.position.set(-W/2 + 1.0, 0.17, 1.4);
+      scene.add(basket);
+      // spools inside — colored balls
+      const yarnColors = [0xa04030, 0xc89a40, 0x2a6080, 0x408050, 0xb060a0, 0x6a3a80, 0xd0c890];
+      for (let i = 0; i < 8; i++) {
+        const c = yarnColors[i % yarnColors.length];
+        const ball = new THREE.Mesh(
+          new THREE.SphereGeometry(0.13 + Math.random()*0.02, 14, 10),
+          new THREE.MeshStandardMaterial({ color: c, roughness: 0.9 })
+        );
+        ball.position.set(-W/2 + 1.0 + (Math.random() - 0.5) * 0.4, 0.22 + (Math.random() * 0.2), 1.4 + (Math.random() - 0.5) * 0.4);
+        scene.add(ball);
+      }
+
+      // ------- shelving with stacked yarn cones -------
+      const shelfMat = new THREE.MeshStandardMaterial({ color: 0x6a4222, roughness: 0.95 });
+      const shelf = new THREE.Mesh(new THREE.BoxGeometry(0.34, 0.04, 1.6), shelfMat);
+      shelf.position.set(-W/2 + 0.22, 1.5, -1.8);
+      scene.add(shelf);
+      for (let i = 0; i < 5; i++) {
+        const c = yarnColors[(i + 2) % yarnColors.length];
+        const cone = new THREE.Mesh(
+          new THREE.CylinderGeometry(0.06, 0.11, 0.26, 14),
+          new THREE.MeshStandardMaterial({ color: c, roughness: 0.95 })
+        );
+        cone.position.set(-W/2 + 0.22, 1.65, -1.8 + (i - 2) * 0.3);
+        scene.add(cone);
+      }
+
+      // ------- woven samples hanging on the right wall -------
+      const sampleMats = [
+        new THREE.MeshStandardMaterial({ color: 0xa84030, roughness: 0.95, side: THREE.DoubleSide }),
+        new THREE.MeshStandardMaterial({ color: 0x40688a, roughness: 0.95, side: THREE.DoubleSide }),
+        new THREE.MeshStandardMaterial({ color: 0xc8a060, roughness: 0.95, side: THREE.DoubleSide })
+      ];
+      for (let i = 0; i < 3; i++) {
+        const samp = new THREE.Mesh(new THREE.PlaneGeometry(0.5, 0.85), sampleMats[i]);
+        samp.position.set(W/2 - 0.05, 1.8, -1.4 + i * 0.8);
+        samp.rotation.y = -Math.PI / 2;
+        scene.add(samp);
+        // wooden top rod
+        const rod = new THREE.Mesh(
+          new THREE.CylinderGeometry(0.018, 0.018, 0.6, 8),
+          oak
+        );
+        rod.rotation.x = Math.PI / 2;
+        rod.position.set(W/2 - 0.05, 2.22, -1.4 + i * 0.8);
+        scene.add(rod);
+      }
+
+      // ------- tapestry-themed whiteboard -------
+      const wb = makePlaceholderWhiteboard({
+        width: 2.6, height: 1.7,
+        color: 0xe8d4a8, emissive: 0x504028, frameColor: 0x3a1a14
+      });
+      wb.position.set(0, 1.85, -D/2 + 0.04);
+      wb.userData.boardKind = 'tapestry';
+      // add decorative tassels on bottom corners — tiny cylinders dangling
+      const tasselMat = new THREE.MeshStandardMaterial({ color: 0xc8a060, roughness: 0.95 });
+      for (const sx of [-1.4, 1.4]) {
+        const tas = new THREE.Mesh(new THREE.CylinderGeometry(0.025, 0.04, 0.18, 8), tasselMat);
+        tas.position.set(sx, -0.97, 0.02);
+        wb.add(tas);
+      }
+      scene.add(wb);
+
+      const backDoor = buildBackDoor(D, shared.doorWood);
+      scene.add(backDoor);
+
+      return {
+        scene, width: W, depth: D, height: H,
+        backDoor, whiteboard: wb,
+        entryYaw: 0,
+        doors: [backDoor]
+      };
+    }
+    ROOM_BUILDERS['textile-loom-room'] = buildTextileLoomRoom;
+
+    // ----------------------------------------------------------------
     // Whiteboard data rendering. Each furnished room declares a
     // boardKind (etched-glass / chalkboard / iron-framed-slate / ...);
     // we render the project record to a 2048x1280 canvas styled to
