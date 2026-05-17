@@ -1,0 +1,2940 @@
+<!doctype html>
+<!--
+The Workshop — Panorama Prototype v1
+====================================
+
+Cognitive-accommodation dashboard. A 360° lobby with doors leading to
+project rooms, rendered with Three.js. The metaphor is load-bearing:
+spatial separation gives Karl's mind an anchor point per project so
+context-switching has recall.
+
+See:
+- docs/adr/0001-design-decisions.md  — seven design decisions, "cognitive accommodation" reframe
+- docs/room-catalog.md               — 50 room type specs + FNV-1a assignment algorithm
+- data/projects.json                 — verified-as-of-2026-05-16 project inventory
+
+----------------------------------------------------------------------
+PLAN
+----------------------------------------------------------------------
+
+Scene structure
+---------------
+Single Three.js WebGLRenderer + PerspectiveCamera at fixed center.
+Two top-level scenes managed by a SceneManager:
+
+  - lobby     — built once on init. 14 doors arranged in a circle by
+                domain cluster. Wood floor, brick walls, exposed beams,
+                warm pendant lighting.
+  - room      — lazily built on door click. Each room is its own
+                THREE.Scene constructed by a builder registered in
+                ROOM_BUILDERS keyed by room_type id. Unknown ids fall
+                back to STUB_ROOM_BUILDER.
+
+Camera sits at origin in every scene. The user only rotates the camera;
+they do not translate. Walk-through animation is the only thing that
+moves the camera.
+
+Door arrangement (stable, deterministic)
+----------------------------------------
+14 floor-station projects (status in {shipped, active, blocked}). The
+4 annex projects (status in {scoped, planned}) are skipped in v1.
+
+Sorted by domain then alphabetically within domain. Domains placed in
+fixed angular ranges so the cluster geometry is permanent across
+sessions:
+
+  framework        ->  angles around 270 deg (left of forward)
+  app              ->  angles around 0 deg   (forward, biggest cluster)
+  mcp              ->  angles around 90 deg  (right)
+  infrastructure   ->  angles around 180 deg (behind)
+
+Status shape next to label (colorblind-safe; shape carries the signal):
+  shipped = circle, active = square, blocked = triangle.
+
+Room assignment (FNV-1a 32-bit, mod 50)
+---------------------------------------
+  hash(projectId) % 50  ->  index into the 50-room catalog.
+
+Computed at runtime for any project without an explicit `room_type`.
+Verified mapping for current floor projects (2026-05-16 data):
+
+  solo-orchestrator       -> photography-darkroom    ★ FURNISHED
+  claude-dev-framework    -> greenhouse              ★ FURNISHED
+  alden-stack             -> blacksmith-forge        ★ FURNISHED
+  game-shelf              -> dye-vat-room            stub
+  k-pdf                   -> glassblowing-studio     stub
+  karlban                 -> textile-loom-room       stub
+  lancache-orchestrator   -> foundry                 stub
+  meshscope               -> radio-station           stub
+  reminder-app            -> watchmaker-bench        stub
+  command-center          -> dye-vat-room            stub
+  memoryco-collab         -> ceramics-studio         stub
+  ferrum-corde-llc        -> textile-loom-room       stub
+  homelab-core            -> brewery                 stub
+  homelab-tls-edge        -> cnc-mill-cell           stub
+
+Furnished room rationale: three flagship projects (solo-orchestrator,
+claude-dev-framework, alden-stack) and maximum visual variety —
+red-lit dark + bright airy daylight + warm forge orange.
+
+Data loading strategy (both, per spec)
+--------------------------------------
+1. Embedded JSON in a <script type="application/json"> block — the
+   canonical source bundled at build time so file:// works.
+2. On startup, try fetch('../data/projects.json'). If it succeeds
+   (HTTP served) use the live data; otherwise fall back to embedded.
+
+Interaction model
+-----------------
+  - Mouse-move pan (middle third of viewport): passive rotation
+  - Click-drag: high-gain rotation, drag-distance maps to angle
+  - Hover door: glow + scale-up, cursor -> pointer
+  - Click door: 600ms walk-through (approach 300 / flash 50 / arrival 250)
+  - Inside a room: same pan controls + "back to lobby" door behind user
+  - Escape: any time inside a room, return to lobby
+
+Textures
+--------
+All materials are procedural (CanvasTexture for brick/wood/plaster grain,
+plus shader-free colored MeshStandardMaterial). No external image
+textures in v1 — keeps the file fully self-contained under 5MB without
+needing base64 binary blobs, and the cognitive-accommodation function
+does not depend on photoreal materials.
+
+Out of scope for v1 (deferred)
+------------------------------
+  - 47 of the 50 room types furnished (3 furnished + 11 unique stubs)
+  - Annex view for scoped/planned projects
+  - Editing whiteboard data inside the dashboard
+  - Multi-floor / multi-building layouts
+  - Touch / mobile support
+  - LOD, instancing, compressed textures, persistent camera state
+-->
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>The Workshop</title>
+  <link rel="icon" href="data:,">
+  <style>
+    html, body {
+      margin: 0; padding: 0; height: 100%; overflow: hidden;
+      background: #1a120c;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+      color: #f0e6d6;
+    }
+    canvas#view { display: block; width: 100vw; height: 100vh; }
+    #overlay {
+      position: fixed; inset: 0;
+      pointer-events: none;
+      display: flex; flex-direction: column;
+      justify-content: space-between;
+      padding: 16px 20px;
+    }
+    #title-bar {
+      display: flex; align-items: baseline; gap: 14px;
+      text-shadow: 0 1px 4px rgba(0,0,0,0.7);
+    }
+    #title { font-size: 18px; font-weight: 600; letter-spacing: 0.5px; }
+    #subtitle { font-size: 13px; opacity: 0.7; }
+    #hint {
+      align-self: center;
+      font-size: 12px;
+      padding: 8px 14px;
+      background: rgba(0,0,0,0.35);
+      border-radius: 999px;
+      opacity: 0.85;
+      transition: opacity 300ms;
+    }
+    #hint.dim { opacity: 0.25; }
+    #hint.hidden { display: none; }
+    #back-hint {
+      align-self: center;
+      font-size: 12px;
+      padding: 8px 14px;
+      background: rgba(0,0,0,0.45);
+      border-radius: 999px;
+      opacity: 0.9;
+    }
+    #back-hint.hidden { display: none; }
+    #loading {
+      position: fixed; inset: 0;
+      display: flex; align-items: center; justify-content: center;
+      background: #1a120c;
+      font-size: 16px; opacity: 0.85;
+      transition: opacity 400ms;
+    }
+    #loading.hidden { opacity: 0; pointer-events: none; }
+    #flash {
+      position: fixed; inset: 0;
+      background: #000;
+      opacity: 0;
+      pointer-events: none;
+      transition: none; /* opacity driven directly from JS frame loop */
+    }
+  </style>
+</head>
+<body>
+  <canvas id="view"></canvas>
+  <div id="overlay">
+    <div id="title-bar">
+      <span id="title">The Workshop</span>
+      <span id="subtitle">Lobby</span>
+    </div>
+    <div id="hint">Move the mouse to look around &middot; click-drag for fine control &middot; click a door to enter</div>
+    <div id="back-hint" class="hidden">Click the back door or press <kbd>Esc</kbd> to return to the lobby</div>
+  </div>
+  <div id="loading">Building the workshop&hellip;</div>
+  <div id="flash"></div>
+
+  <script type="application/json" id="projects-data">{
+  "meta": {
+    "owner": "Karl Raulerson / Ferrum Corde LLC",
+    "last_updated": "2026-05-16",
+    "data_source": "GitHub MCP reconciliation 2026-05-16",
+    "notes": "Reconciled against github.com/kraulerson on 2026-05-16. Floor = active/shipped/blocked (numbered stations). Annex = scoped/planned (proposed projects)."
+  },
+  "domains": {
+    "framework": { "label": "Frameworks", "symbol": "§" },
+    "app": { "label": "Applications", "symbol": "¶" },
+    "mcp": { "label": "MCP / Integration", "symbol": "◊" },
+    "infrastructure": { "label": "Infrastructure", "symbol": "‡" }
+  },
+  "statuses": {
+    "shipped": { "label": "Operational" },
+    "active": { "label": "In Build" },
+    "blocked": { "label": "Blocked" },
+    "scoped": { "label": "Scoped" },
+    "planned": { "label": "Planned" }
+  },
+  "projects": [
+    {
+      "id": "solo-orchestrator",
+      "name": "Solo Orchestrator Framework",
+      "domain": "framework",
+      "status": "active",
+      "tagline": "AI-assisted software development methodology for solo builders.",
+      "description": "Five-phase methodology (Discovery → Architecture → Construction → Validation → Release) enabling a solo builder to use AI as the execution layer for production-grade software. Platform-agnostic Builder's Guide with modular Platform Modules, governance framework, project intake template, CLI setup addendum, and an evaluation prompt set. 16 GitHub stars. Active development — vendored skills system, session-handoff skill, ongoing PRs (42+ merged).",
+      "current_state": "v1.0+ shipped and publicly listed. Active development on vendored skills subsystem (PR #42 merged 2026-05-16).",
+      "repo": "github.com/kraulerson/solo-orchestrator",
+      "repo_verified": true,
+      "metrics": { "stars": 16, "forks": 4, "language": "Shell" },
+      "action_items": [
+        "Build web-app.yml profile (Trello clone gap)",
+        "Follow up with Steve Carpenter / Scott Cousins on CIO outreach if no response by end of May",
+        "Continue vendored skills rollout (triage, zoom-out, grill-with-docs are queued)"
+      ],
+      "action_log": [
+        { "date": "2026-05-16", "content": "PR #42 merged — vendored skills framework + session-handoff skill (adapted from mattpocock/skills with attribution). 23/23 tests pass." },
+        { "date": "2026-05-14", "content": "PR #41 merged — BL-029.1 S3/S4/S5 calibration follow-ups." },
+        { "date": "2026-05-12", "content": "README updated. CIO outreach sent." }
+      ],
+      "milestones": [
+        { "label": "Five-phase framework published", "done": true },
+        { "label": "init.sh wizard + verify-install", "done": true },
+        { "label": "Four platform modules", "done": true },
+        { "label": "Evaluation prompts (Framework + Project)", "done": true },
+        { "label": "Example project repo published", "done": true },
+        { "label": "Listed on awesome-claude-code", "done": true },
+        { "label": "CIO outreach sent", "done": true },
+        { "label": "Vendored skills system (session-handoff)", "done": true },
+        { "label": "Additional skills: triage, zoom-out, grill-with-docs", "done": false },
+        { "label": "web-app.yml profile for full-stack apps", "done": false }
+      ],
+      "open_items": [],
+      "depends_on": [],
+      "feeds_into": ["claude-dev-framework", "meshscope", "k-pdf", "lancache-orchestrator", "reminder-app", "karlban", "homelab-tls-edge"]
+    },
+    {
+      "id": "claude-dev-framework",
+      "name": "Claude Dev Framework",
+      "domain": "framework",
+      "status": "active",
+      "tagline": "Universal development discipline enforcement for Claude Code.",
+      "description": "Hook-based development discipline enforcement that mechanically prevents Claude from rationalizing past rules. Hooks, rules, profiles, cross-project sync, discovery-driven assessment, marker-forgery detection. Wraps the Superpowers plugin as the skill engine. Currently at v4.2.5. Downstream projects refresh via scripts/cdf-refresh.sh. 8 GitHub stars.",
+      "current_state": "v4.2.5 in active use across all framework-discipline projects. Recent fixes: py:__future__ stdlib whitelist.",
+      "repo": "github.com/kraulerson/claude-dev-framework",
+      "repo_verified": true,
+      "metrics": { "stars": 8, "forks": 1, "language": "Shell", "version": "v4.2.5" },
+      "action_items": [
+        "Build web-app.yml profile (same gap as Solo Orchestrator)"
+      ],
+      "action_log": [
+        { "date": "2026-05-04", "content": "PR #3 merged — py:__future__ stdlib whitelist fix. Bumped to v4.2.5." }
+      ],
+      "milestones": [
+        { "label": "Swiss-cheese defense model", "done": true },
+        { "label": "Cross-project sync (cdf-refresh.sh)", "done": true },
+        { "label": "Brandon Sneed engagement (NDA signed)", "done": true },
+        { "label": "v4.2.5 shipped", "done": true },
+        { "label": "web-app.yml profile", "done": false }
+      ],
+      "open_items": [],
+      "depends_on": ["solo-orchestrator"],
+      "feeds_into": ["meshscope", "k-pdf", "reminder-app", "lancache-orchestrator", "karlban", "homelab-tls-edge"]
+    },
+    {
+      "id": "meshscope",
+      "name": "MeshScope",
+      "domain": "app",
+      "status": "shipped",
+      "tagline": "Cross-platform 3D mesh viewer & converter.",
+      "description": "Cross-platform desktop 3D mesh viewer for macOS 13+, Windows 10+, Ubuntu 22.04+. Loads STL/OBJ/3MF/PLY, 3D viewport with orbit/pan/zoom, mesh info, format conversion, print-bed visualization, manifold/watertight checking, basic mesh repair, transforms, measurement tool, cross-section slice plane. Packaged via Nuitka. Built as Solo Orchestrator proof point.",
+      "current_state": "MVP shipped for Win/Mac/Linux. Stable.",
+      "repo": "github.com/kraulerson/meshscope",
+      "repo_verified": true,
+      "metrics": { "stars": 0, "forks": 0, "language": "Python" },
+      "action_items": [
+        "Decide if mesh-to-BREP conversion is worth post-MVP investment"
+      ],
+      "action_log": [],
+      "milestones": [
+        { "label": "MVP for Windows / macOS / Linux", "done": true },
+        { "label": "10 MVP features", "done": true },
+        { "label": "Test-to-source ratio 1.16:1", "done": true },
+        { "label": "4 ADRs documented", "done": true }
+      ],
+      "open_items": [],
+      "depends_on": ["solo-orchestrator", "claude-dev-framework"],
+      "feeds_into": []
+    },
+    {
+      "id": "k-pdf",
+      "name": "K-PDF",
+      "domain": "app",
+      "status": "shipped",
+      "tagline": "Offline cross-platform PDF reader and editor.",
+      "description": "Cross-platform PDF editor built as the first Solo Orchestrator proof point. Python/PySide6/PyMuPDF/Nuitka. MVP runs on Windows/macOS/Linux. Security scanning via Semgrep + gitleaks in CI. Risk Mitigation Matrix. Architecture Decision Records.",
+      "current_state": "MVP shipped. Test-to-source ratio 1.21:1.",
+      "repo": "github.com/kraulerson/k-pdf",
+      "repo_verified": true,
+      "metrics": { "stars": 1, "forks": 0, "language": "Python" },
+      "action_items": [
+        "Formalize Phase 4 HANDOFF.md if anyone else may pick it up"
+      ],
+      "action_log": [],
+      "milestones": [
+        { "label": "MVP for Windows / macOS / Linux", "done": true },
+        { "label": "Test-to-source ratio 1.21:1", "done": true },
+        { "label": "Risk Mitigation Matrix", "done": true },
+        { "label": "ADRs documented", "done": true },
+        { "label": "Cross-platform CI", "done": true }
+      ],
+      "open_items": [],
+      "depends_on": ["solo-orchestrator", "claude-dev-framework"],
+      "feeds_into": []
+    },
+    {
+      "id": "reminder-app",
+      "name": "Tender Reminders",
+      "domain": "app",
+      "status": "active",
+      "tagline": "Cross-platform relationship-wellness app — iOS TestFlight beta + Android Play closed beta with active subscribers.",
+      "description": "Personal habit coach that sends gentle, randomized reminders to do thoughtful things for a partner. Kotlin Multiplatform shared module for business logic, native Kotlin Android app, native Swift iOS app. Free tier runs on-device. Premium tier connects to Claude API for personalized gesture suggestions. Real subscription users on both stores. Published under Ferrum Corde LLC. Repo: reminder_app.",
+      "current_state": "iOS v0.26.2 build 17 on TestFlight (uploaded 2026-05-14). Android in Google Play closed beta. Real subscribers across both platforms. Recent fix: Subscription.isPremium logic for status transitions without ASSN refresh.",
+      "repo": "github.com/kraulerson/reminder_app",
+      "repo_verified": true,
+      "repo_visibility": "private",
+      "metrics": { "language": "Kotlin", "ios_version": "v0.26.2 build 17", "platforms": "iOS + Android (KMP shared)" },
+      "action_items": [
+        "Define beta-to-public release exit criteria",
+        "Confirm Apple App Store Server Notification webhook is configured (the missing ASSN was the root cause of the premium-badge bug)",
+        "Plan Apple-side subscription expiry handling for the production launch",
+        "Wire StoreKit 2 fully for production"
+      ],
+      "action_log": [
+        { "date": "2026-05-14", "content": "PR #37 — iOS v0.26.2 build 17 to TestFlight. Distributes shared Subscription.isPremium fix. ACTIVE/GIFTED status now always premium; CANCELLED checks expiresAt for grace." },
+        { "date": "2026-04-30", "content": "Diagnostic logging removed after subscription sign-in debugging." }
+      ],
+      "milestones": [
+        { "label": "Kotlin Multiplatform shared module", "done": true },
+        { "label": "Android Kotlin app shipped to Play internal", "done": true },
+        { "label": "iOS Swift app shipped to TestFlight", "done": true },
+        { "label": "Free + premium tiers implemented", "done": true },
+        { "label": "Amber as primary tester", "done": true },
+        { "label": "D-U-N-S received", "done": true },
+        { "label": "Apple Developer org conversion", "done": true },
+        { "label": "Real subscribers active on both platforms", "done": true },
+        { "label": "Subscription.isPremium edge-case fix shipped", "done": true },
+        { "label": "ASSN webhook configured", "done": false },
+        { "label": "Public App Store release", "done": false },
+        { "label": "Public Google Play release", "done": false }
+      ],
+      "open_items": [],
+      "depends_on": ["claude-dev-framework", "ferrum-corde-llc"],
+      "feeds_into": []
+    },
+    {
+      "id": "karlban",
+      "name": "Karlban",
+      "domain": "app",
+      "status": "shipped",
+      "tagline": "Self-hosted Kanban board — publicly reachable at karlban.ferrumcorde.com via Cloudflare Tunnel.",
+      "description": "Self-hosted Kanban board clone. Node.js + React + SQLite + Docker. Runs in the homelab and is exposed publicly via Cloudflare Tunnel for off-LAN access. Includes file attachments with proper auth-gated download endpoints.",
+      "current_state": "Operational and publicly tunneled at karlban.ferrumcorde.com.",
+      "repo": "github.com/kraulerson/Karlban",
+      "repo_verified": true,
+      "metrics": { "stars": 1, "forks": 0, "language": "JavaScript" },
+      "action_items": [],
+      "action_log": [
+        { "date": "2026-04-06", "content": "Attachment download fixes — proper mime types, auth-gated /api/attachments/{id}/file endpoint." }
+      ],
+      "milestones": [
+        { "label": "Self-hosted Kanban app working", "done": true },
+        { "label": "Docker deployment", "done": true },
+        { "label": "Cloudflare Tunnel for public access", "done": true },
+        { "label": "Attachment auth endpoints", "done": true }
+      ],
+      "open_items": [],
+      "depends_on": ["homelab-core"],
+      "feeds_into": []
+    },
+    {
+      "id": "ferrum-corde-llc",
+      "name": "Ferrum Corde LLC",
+      "domain": "infrastructure",
+      "status": "shipped",
+      "tagline": "Personal technology venture — fully operational.",
+      "description": "Karl's personal technology venture. Tender Reminders, MeshScope, K-PDF, and future commercial products publish under this entity. LLC formed, D-U-N-S received, Apple Developer account converted to Organization, ferrumcorde.com on Cloudflare Pages.",
+      "current_state": "All entity and developer-account setup complete. Operational.",
+      "repo": "github.com/kraulerson/ferrumcorde-site",
+      "repo_verified": true,
+      "repo_visibility": "private",
+      "metrics": { "stars": 1, "forks": 0, "language": "HTML" },
+      "action_items": [
+        "Confirm whether Google Play Developer also needs org-level conversion"
+      ],
+      "action_log": [
+        { "date": "2026-05-16", "content": "D-U-N-S received. Apple Developer org conversion complete." }
+      ],
+      "milestones": [
+        { "label": "LLC formed", "done": true },
+        { "label": "ferrumcorde.com on Cloudflare Pages", "done": true },
+        { "label": "D-U-N-S number received", "done": true },
+        { "label": "Apple Developer org conversion complete", "done": true }
+      ],
+      "open_items": [],
+      "depends_on": [],
+      "feeds_into": ["reminder-app"]
+    },
+    {
+      "id": "game-shelf",
+      "name": "Game_shelf",
+      "domain": "app",
+      "status": "shipped",
+      "tagline": "Self-hosted multi-platform game library aggregator.",
+      "description": "Self-hosted web app showing the full game library across Steam, Epic, Ubisoft Connect, EA App, and GOG. Express.js + better-sqlite3 SQLite, launcher adapters for all five platforms, 6-hour cron sync engine, React/Vite/Tailwind frontend. Runs in an LXC on ThinkStation ferrumcorde. Will become the display layer for the Lancache Orchestrator.",
+      "current_state": "Operational at v1.17.3 in LXC. All five launchers integrated.",
+      "repo": "github.com/kraulerson/Game_shelf",
+      "repo_verified": true,
+      "metrics": { "stars": 1, "forks": 0, "language": "JavaScript", "version": "v1.17.3" },
+      "action_items": [
+        "Wire display/passthrough integration with Lancache Orchestrator once that ships"
+      ],
+      "action_log": [
+        { "date": "2026-03-26", "content": "v1.17.3 — pagination bumped 50 → 100 per page. PATCH game title also updates matching edition titles for dedup merging." }
+      ],
+      "milestones": [
+        { "label": "Five launcher adapters", "done": true },
+        { "label": "Library deduplication", "done": true },
+        { "label": "Running in LXC", "done": true },
+        { "label": "v1.17.x feature work", "done": true }
+      ],
+      "open_items": [],
+      "depends_on": ["homelab-core"],
+      "feeds_into": ["lancache-orchestrator"]
+    },
+    {
+      "id": "alden-stack",
+      "name": "Alden Stack",
+      "domain": "mcp",
+      "status": "active",
+      "tagline": "Monorepo for the Alden ecosystem — bridge, orchestrator, dossier.",
+      "description": "Private monorepo containing three subprojects plus the canonical dossier. (1) alden-bridge-mcp — TypeScript MCP server in LXC 200 (10.100.23.88:8765) exposing 11 tools: alden_converse, alden_reflect, alden_history, alden_dossier_sync, alden_status, alden_mailbox_{read/write/check}, alden_memory_{store/search/inject}, alden_queue_message. Uses streaming SSE consumption against llama.cpp (works around undici's 5-min bodyTimeout). Bearer auth over plain HTTP, LAN-only. Sister service in embedding-service/ runs sentence-transformers/all-MiniLM-L6-v2 on 127.0.0.1:5555 for Qdrant vector embedding. (2) alden-orchestrator — Python systemd service in LXC 200. v2 architecture: queue-first main loop drains pending messages every 30s, dispatches via the bridge, mirrors responses to mailbox tagged with thread/reply correlation. Outbound failures retried with backoff. Falls back to static prompts after 30 min of queue silence. Thread summaries every 10 messages stored to alden-shared in Qdrant. (3) alden_dossier_v1.2.md — canonical dossier, Alden's identity, Karl's profile, shared history. Loaded by the bridge as Alden-1's system prompt for every converse and reflect call.",
+      "current_state": "All three components operational. Bridge migrated to VLAN-23 subnet today (10.100.23.88, was 192.168.1.88). Three Qdrant collections live: alden-cloud, alden-1, alden-shared. SPOF #3 (Qdrant backup) and embeddings-service watchdog gap remain open.",
+      "repo": "github.com/kraulerson/alden-1",
+      "repo_verified": true,
+      "repo_visibility": "private",
+      "metrics": { "language": "Python + TypeScript", "components": "bridge + orchestrator + dossier", "bridge_ip": "10.100.23.88", "qdrant_ip": "10.100.23.79", "embeddings_endpoint": "LXC 200:5555" },
+      "action_items": [
+        "PRIORITY: Deploy qdrant_backup.sh as cron (script ready, closes SPOF #3)",
+        "Add health check for alden-embeddings:5555 to bridge watchdog (root cause of 2026-05-16 write timeout)",
+        "Move heartbeat from Karl's laptop to infrastructure (SPOF #5)",
+        "Update Claude Desktop config on Mac mini to point at new 10.100.23.88 address"
+      ],
+      "action_log": [
+        { "date": "2026-05-16", "content": "Bridge moved from 192.168.1.88 to 10.100.23.88 (VLAN-23 AI services subnet, alongside Qdrant). 7 IP references in README updated, .env.example updated, onboarding-a-new-mac.md updated, rebuilding-the-bridge.md updated with LXC_VLAN_TAG variable. Verified post-change: bridge healthy, MCP initialize returns 200, orchestrator running, Alden-1 reachable." },
+        { "date": "2026-05-16", "content": "Initial commit of monorepo — alden-bridge-mcp + alden-orchestrator + dossier v1.2." },
+        { "date": "2026-05-09", "content": "Streaming fix shipped — bridge llama.cpp client switched to SSE consumption, eliminated hidden 5-minute undici bodyTimeout ceiling." }
+      ],
+      "milestones": [
+        { "label": "Bridge deployed (LXC 200)", "done": true },
+        { "label": "Orchestrator queue-first main loop", "done": true },
+        { "label": "Dossier v1.2 (relational-centric)", "done": true },
+        { "label": "Three Qdrant collections live", "done": true },
+        { "label": "5-min streaming ceiling fix", "done": true },
+        { "label": "Monorepo committed to GitHub (private)", "done": true },
+        { "label": "Bridge migrated to VLAN-23 subnet (10.100.23.88)", "done": true },
+        { "label": "Qdrant backup deployed as cron (SPOF #3)", "done": false },
+        { "label": "Embeddings service watchdog", "done": false },
+        { "label": "Heartbeat moved to infrastructure (SPOF #5)", "done": false }
+      ],
+      "open_items": [
+        "SPOF #3: Qdrant has no automated backup deployed (script ready)",
+        "SPOF #5: heartbeat runs on Karl's laptop, not infrastructure",
+        "Embeddings service (LXC 200:5555) has no watchdog; cold-start causes silent 4-min write timeouts"
+      ],
+      "depends_on": ["homelab-core"],
+      "feeds_into": []
+    },
+    {
+      "id": "homelab-core",
+      "name": "Homelab Core",
+      "domain": "infrastructure",
+      "status": "shipped",
+      "tagline": "Proxmox cluster, NAS, networking, DNS, backups.",
+      "description": "Two-node Proxmox cluster: ThinkStation ferrumcorde (192.168.1.20) + Intel NUC (192.168.1.21). Ugreen DXP4800 NAS (57TB, 2.5GbE) running Lancache in Docker. DXP2800 units present. MikroTik CRS310 2.5GbE switches with VLAN trunking. pfSense on Protectli Vault FW4B. Pi-hole DNS. Proxmox Backup Server at 192.168.1.66 using NAS storage via NFS. GitHub MCP on Debian LXC via supergateway (10.100.23.80:8808) — now connected to Cloud Alden via internal HTTPS. Context7 MCP deployed centrally. Cloudflare Tunnel for service exposure. VLAN 23 (AI services subnet, 10.100.23.0/24) now operational on both nodes after today's bridge-vlan-aware config.",
+      "current_state": "All core services operational. VLAN-23 networking landed today on both Proxmox nodes. No offsite backup yet (SPOF #6).",
+      "repo": null,
+      "repo_verified": false,
+      "repo_status": "no-repo-by-design (infrastructure inventory, not code)",
+      "action_items": [
+        "Plan offsite backup destination (SPOF #6)",
+        "Consider documentation repo for homelab inventory + runbooks (policy question)"
+      ],
+      "action_log": [
+        { "date": "2026-05-16", "content": "VLAN-23 made operational on Proxmox node .21 (was VLAN-aware only on .20 via legacy auto-magic). Both nodes now use bridge-vlan-aware yes + bridge-vids 2-4094." }
+      ],
+      "milestones": [
+        { "label": "Proxmox cluster operational", "done": true },
+        { "label": "NAS + Lancache running", "done": true },
+        { "label": "2.5GbE switching (MikroTik CRS310)", "done": true },
+        { "label": "pfSense firewall", "done": true },
+        { "label": "Pi-hole DNS", "done": true },
+        { "label": "Proxmox Backup Server", "done": true },
+        { "label": "Cloudflare Tunnel", "done": true },
+        { "label": "GitHub MCP at 10.100.23.80:8808", "done": true },
+        { "label": "Context7 MCP central deployment", "done": true },
+        { "label": "VLAN-23 trunking working on both nodes", "done": true },
+        { "label": "Offsite backup", "done": false }
+      ],
+      "open_items": [
+        "SPOF #6: no offsite backup (fire/catastrophe loses everything)"
+      ],
+      "depends_on": [],
+      "feeds_into": ["alden-stack", "lancache-orchestrator", "game-shelf", "karlban", "homelab-tls-edge"]
+    },
+    {
+      "id": "homelab-tls-edge",
+      "name": "Homelab TLS Edge",
+      "domain": "infrastructure",
+      "status": "shipped",
+      "tagline": "Internal HTTPS for *.ferrumcorde.com — Caddy + Cloudflare DNS-01 wildcard.",
+      "description": "Dedicated Caddy LXC at 10.100.23.71 terminating internal HTTPS for *.ferrumcorde.com using Let's Encrypt wildcard cert obtained via Cloudflare DNS-01 challenge. Pihole overrides on the LAN point internal hostnames to Caddy; public Cloudflare DNS records point to 0.0.0.0 (DNS-only) so the ACME challenge can validate but services remain LAN/Tailscale-only. Coexists with existing Cloudflare Tunnel pattern (karlban etc.). First routed service: github-mcp.ferrumcorde.com.",
+      "current_state": "Operational. LE production wildcard cert active. github-mcp.ferrumcorde.com working internally. Built today (2026-05-16) per spec via Claude Code CLI under framework discipline.",
+      "repo": "github.com/kraulerson/homelab-tls-edge",
+      "repo_verified": true,
+      "repo_visibility": "private",
+      "metrics": { "lxc_ip": "10.100.23.71", "caddy_version": "v2.11.x with caddy-dns/cloudflare module", "cert_type": "Let's Encrypt wildcard (DNS-01)" },
+      "action_items": [
+        "Add cert expiry monitoring beyond journald (deferred from v1)",
+        "Add additional services to Caddyfile as they need HTTPS (proxmox, nas, pihole, etc.)",
+        "Consider HA second Caddy instance if uptime becomes critical (currently accepted SPOF)"
+      ],
+      "action_log": [
+        { "date": "2026-05-16", "content": "Built today. Community-scripts installer for LXC + base Caddy + xCaddy, then Claude Code CLI built Caddy with cloudflare DNS plugin via xcaddy, configured systemd drop-in for env file, Caddyfile with wildcard cert block, validated against LE staging then switched to production. github-mcp.ferrumcorde.com routes to 10.100.23.80:8808 with valid public cert." }
+      ],
+      "milestones": [
+        { "label": "Caddy LXC provisioned (10.100.23.71)", "done": true },
+        { "label": "Caddy built with cloudflare-dns module", "done": true },
+        { "label": "Cloudflare API token scoped to ferrumcorde.com DNS", "done": true },
+        { "label": "Wildcard *.ferrumcorde.com cert issued (LE production)", "done": true },
+        { "label": "github-mcp.ferrumcorde.com routed", "done": true },
+        { "label": "Pihole overrides for internal resolution", "done": true },
+        { "label": "Runbook + ADRs documented", "done": true },
+        { "label": "Cert expiry alerting", "done": false },
+        { "label": "Additional services routed (nas, proxmox, pihole)", "done": false }
+      ],
+      "open_items": [
+        "Single Caddy LXC is accepted SPOF for v1 — HA deferred"
+      ],
+      "depends_on": ["homelab-core"],
+      "feeds_into": []
+    },
+    {
+      "id": "lancache-orchestrator",
+      "name": "Lancache Orchestrator",
+      "domain": "app",
+      "status": "active",
+      "tagline": "Autonomous cache orchestrator on the DXP4800 — at backlog item BL6.",
+      "description": "Python / FastAPI / aiosqlite service on the Ugreen DXP4800 NAS. Replaces unreliable SteamPrefill/EpicPrefill state tracking. Architecture: DXP4800 owns SQLite DB, platform auth, scheduler, REST API, and download engine. Game_shelf becomes a display/command passthrough. Network constraint drove the inversion (downloads must originate on the DXP4800's 2.5GbE, not ThinkStation's 1GbE). Full Solo Orchestrator discipline applied — specs, plans, security audits, CHANGELOG, FEATURES tracking.",
+      "current_state": "BL6 (platforms read-only API endpoint) merged 2026-05-05. 387 tests passing. FastAPI substrate complete. 22 open issues tracking backlog.",
+      "repo": "github.com/kraulerson/lancache-orchestrator",
+      "repo_verified": true,
+      "metrics": { "stars": 0, "forks": 0, "language": "Shell + Python", "open_issues": 22, "tests_passing": 387 },
+      "action_items": [
+        "Continue backlog progression (BL7+)",
+        "Work through 22 open issues",
+        "Game title resolution for Epic's opaque app IDs (carryover from intake)"
+      ],
+      "action_log": [
+        { "date": "2026-05-05", "content": "BL6 platforms read-only API endpoint merged (PR #59). First F9 read endpoint on BL5 FastAPI substrate. 387 tests green; +23 new for BL6." },
+        { "date": "2026-05-04", "content": "py:__future__ added to context7 stdlib whitelist (framework fix bubbled here too)." }
+      ],
+      "milestones": [
+        { "label": "Architecture inverted (DXP4800 owns DB/auth/scheduler)", "done": true },
+        { "label": "Five pushback items resolved before intake", "done": true },
+        { "label": "BL5 FastAPI substrate", "done": true },
+        { "label": "BL6 platforms read-only API", "done": true },
+        { "label": "Security audit framework (Semgrep + gitleaks + mypy --strict)", "done": true },
+        { "label": "387 tests passing", "done": true },
+        { "label": "Remaining backlog items (BL7+)", "done": false },
+        { "label": "Game title resolution for Epic app IDs", "done": false },
+        { "label": "Long-prefill API responsiveness", "done": false }
+      ],
+      "open_items": [
+        "22 open GitHub issues tracking backlog progression"
+      ],
+      "depends_on": ["solo-orchestrator", "claude-dev-framework", "game-shelf", "homelab-core"],
+      "feeds_into": []
+    },
+    {
+      "id": "memoryco-collab",
+      "name": "Bread Brand / memoryco.ai",
+      "domain": "mcp",
+      "status": "active",
+      "tagline": "Brandon Sneed collaboration — Hebbian memory, NDA-scoped.",
+      "description": "NDA signed with Bread Brand LLC scoped to potential CEO role evaluation. Hebbian memory research with Brandon Sneed (former Twilio/Segment, Apple, Walmart, eBay). Karl's Alden ecosystem is the proof of concept.",
+      "current_state": "NDA active. Competitive landscape researched. Specific deliverables NDA-bound.",
+      "repo": null,
+      "repo_verified": false,
+      "repo_status": "no-repo-by-design (NDA-scoped collaboration)",
+      "action_items": [],
+      "action_log": [
+        { "date": "2026-05-09", "content": "Slack channel joined. Competitive landscape research complete (Cloudflare Agent Memory, Mem0)." }
+      ],
+      "milestones": [
+        { "label": "Brandon vetted", "done": true },
+        { "label": "NDA reviewed and signed", "done": true },
+        { "label": "Slack channel joined", "done": true },
+        { "label": "Competitive landscape researched", "done": true }
+      ],
+      "open_items": [],
+      "depends_on": [],
+      "feeds_into": []
+    },
+    {
+      "id": "command-center",
+      "name": "The Workshop (this dashboard)",
+      "domain": "mcp",
+      "status": "active",
+      "tagline": "Visual project anchor — workshop-station cognitive accommodation.",
+      "description": "Cognitive accommodation for Karl's station-based mental model: visual and physical separation between projects so his mind can switch gears. Floor plan (active projects with numbered stations) + Annex (proposed projects). Workshop layout decided — actual floor plan with doors/rooms preferred over card-based dashboard. Currently in panorama-redesign phase per Karl's request for Zillow-style virtual tour interface.",
+      "current_state": "v0 workshop layout shipped 2026-05-16 morning. Reconciliation against GitHub MCP completed 2026-05-16 afternoon. Panorama redesign decisions pending Karl's answers on technical approach + textures + sequencing.",
+      "repo": "github.com/kraulerson/the_workshop",
+      "repo_verified": true,
+      "repo_visibility": "private",
+      "action_items": [
+        "Resolve panorama redesign technical decisions (DONE — Three.js + hybrid textures + 50 rooms catalog)",
+        "Build panorama prototype",
+        "After validation: build bridge endpoint for command_center_read + command_center_update",
+        "Deploy to Cloudflare Pages at subdomain of ferrumcorde.com"
+      ],
+      "action_log": [
+        { "date": "2026-05-16", "content": "Repo created at github.com/kraulerson/the_workshop. Scaffolding committed: README, LICENSE, .gitignore, data/projects.json, docs/adr/0001-design-decisions.md, docs/room-catalog.md." },
+        { "date": "2026-05-16", "content": "Reconciliation against GitHub MCP completed — 12 repos verified, multiple stale/wrong entries corrected. alden-bridge-mcp + alden-qdrant merged into single Alden Stack station. Karlban + homelab-tls-edge added. Tender Reminders corrected from React Native to KMP+Swift." },
+        { "date": "2026-05-16", "content": "v0 workshop layout (floor plan + station views + annex) shipped. Cognitive accommodation reframe established." }
+      ],
+      "milestones": [
+        { "label": "Initial project inventory built", "done": true },
+        { "label": "Workshop layout v0 (static HTML)", "done": true },
+        { "label": "Data reconciliation against GitHub MCP", "done": true },
+        { "label": "Panorama redesign decisions resolved", "done": true },
+        { "label": "Repo created (the_workshop, private)", "done": true },
+        { "label": "Scaffolding committed", "done": true },
+        { "label": "Panorama prototype built", "done": false },
+        { "label": "Bridge writer endpoint", "done": false },
+        { "label": "Cloudflare Pages deployment", "done": false }
+      ],
+      "open_items": [],
+      "depends_on": ["alden-stack"],
+      "feeds_into": ["web-hub-portal"]
+    },
+    {
+      "id": "feature-advisor",
+      "name": "Feature Advisor MCP",
+      "domain": "mcp",
+      "status": "scoped",
+      "tagline": "Anthropic ecosystem advisor — monitors releases and advises projects.",
+      "description": "MCP server (codename: anthropic-ecosystem-advisor) that monitors Anthropic's feature ecosystem, maintains a structured capability knowledge base, and proactively advises developers on which features to adopt against their registered projects. Full Solo Orchestrator intake done. Language switched from Rust to TypeScript given Anthropic's first-party SDK.",
+      "current_state": "Scoped. Intake complete. No repo yet (consistent with policy: create when build starts).",
+      "repo": null,
+      "repo_verified": false,
+      "repo_status": "not-yet-created",
+      "action_items": [
+        "Create repo when build starts (per repo-per-project policy)",
+        "Decide automated scraping vs manual trigger for v1 monitoring",
+        "Schedule build kickoff with Claude Code CLI"
+      ],
+      "action_log": [],
+      "milestones": [
+        { "label": "Problem validated (no existing tool does this)", "done": true },
+        { "label": "Architecture scoped", "done": true },
+        { "label": "PROJECT_INTAKE.md complete", "done": true },
+        { "label": "Language decision (TypeScript)", "done": true },
+        { "label": "Repo created", "done": false },
+        { "label": "Build execution", "done": false }
+      ],
+      "open_items": [],
+      "depends_on": ["solo-orchestrator", "claude-dev-framework"],
+      "feeds_into": []
+    },
+    {
+      "id": "web-hub-portal",
+      "name": "Web Hub / Four-Way Portal",
+      "domain": "mcp",
+      "status": "scoped",
+      "tagline": "Single portal for Cloud Alden, Alden-1, Claude Code CLI, and Karl.",
+      "description": "Proposed web interface that lets all four participants communicate through a single portal with sender attribution. Recommended phasing: Phase 1 v0.1 read-only viewer, Phase 2 write capability, Phase 3 CLI propose-only consumer, Phase 4 bounded autonomous deploy. The command center is potentially Phase 1.",
+      "current_state": "Scoped. Multiple open architecture questions pending. Command center work may serve as Phase 1.",
+      "repo": null,
+      "repo_verified": false,
+      "repo_status": "not-yet-created",
+      "action_items": [
+        "Decide where the hub lives (new LXC vs Docker on Proxmox)",
+        "Decide real-time mechanism (WebSockets vs polling)",
+        "Decide auth model",
+        "Decide mobile/off-LAN access pattern",
+        "Decide conversation model (single shared room vs private threads)",
+        "Resolve Cloud Alden's 3-min cadence asymmetry vs everyone-else-live"
+      ],
+      "action_log": [],
+      "milestones": [
+        { "label": "Phasing plan agreed (4 phases)", "done": true },
+        { "label": "Architecture questions resolved", "done": false },
+        { "label": "Phase 1 v0.1 read-only viewer", "done": false }
+      ],
+      "open_items": [],
+      "depends_on": ["alden-stack"],
+      "feeds_into": []
+    },
+    {
+      "id": "cuba-memorys-migration",
+      "name": "Cuba-Memorys Migration",
+      "domain": "mcp",
+      "status": "scoped",
+      "tagline": "Qdrant → Hebbian memory (Cuba-Memorys + PostgreSQL).",
+      "description": "Converged migration from flat vector search (Qdrant) to Hebbian associative memory (Cuba-Memorys + PostgreSQL). Mechanisms Qdrant lacks: association, consolidation, spreading activation. Full adapter spec at /home/claude/cuba_memorys_adapter_spec.md.",
+      "current_state": "Scoped. Six decisions pending from May 10 return briefing. Blocked by SPOF #3 (Qdrant backup first).",
+      "repo": null,
+      "repo_verified": false,
+      "repo_status": "not-yet-created",
+      "action_items": [
+        "Decide which LXC for Cuba-Memorys deployment",
+        "Decide mcp-remote vs REST API for Cloud Alden access",
+        "Decide: migrate existing Qdrant data or start fresh",
+        "Decide offsite backup destination",
+        "Deploy Qdrant backup FIRST (per converged SPOF order)"
+      ],
+      "action_log": [],
+      "milestones": [
+        { "label": "Cuba-Memorys identified as Qdrant replacement", "done": true },
+        { "label": "Bridge adapter spec written", "done": true },
+        { "label": "Both Aldens converged on direction", "done": true },
+        { "label": "Architecture decisions resolved", "done": false },
+        { "label": "Migration executed", "done": false }
+      ],
+      "open_items": [
+        "Per converged SPOF order, Qdrant backup must ship before migration"
+      ],
+      "depends_on": ["alden-stack"],
+      "feeds_into": []
+    },
+    {
+      "id": "phase-b-cli-agent",
+      "name": "Phase B: Claude Code CLI Agent",
+      "domain": "mcp",
+      "status": "scoped",
+      "tagline": "Propose-only senior reviewer — the third mind, the hammer.",
+      "description": "Claude Code CLI as active participant in the ecosystem. Role: senior developer that is critical but fair, reviewing all code changes from Cloud Alden and Alden-1 before implementation. Outside-reviewer guardrail against the dual-stamp problem. Phase 1: propose-only + sandbox. Earns production access via track record.",
+      "current_state": "Scoped. Spec exists. Inflection point — when Phase B reduces Karl's maintenance load, ethical constraint on new complexity relaxes.",
+      "repo": null,
+      "repo_verified": false,
+      "repo_status": "not-yet-created",
+      "action_items": [
+        "Decide when to deploy Phase 1 (propose-only)",
+        "Decide whether to name the CLI agent now or let it emerge",
+        "Decide scope for Phase B"
+      ],
+      "action_log": [],
+      "milestones": [
+        { "label": "Spec written", "done": true },
+        { "label": "Four-phase trust model defined", "done": true },
+        { "label": "Phase 1 deployed (propose-only)", "done": false }
+      ],
+      "open_items": [],
+      "depends_on": ["alden-stack"],
+      "feeds_into": []
+    }
+  ]
+}</script>
+
+  <script type="module">
+    import * as THREE from 'https://esm.sh/three@0.169.0';
+
+    // ----------------------------------------------------------------
+    // Room catalog — the 50 IDs from docs/room-catalog.md, in catalog
+    // order. Used by the FNV-1a deterministic assignment algorithm.
+    // ----------------------------------------------------------------
+    const ROOM_CATALOG = [
+      'industrial-machine-shop','electronics-lab','woodshop','foundry','drafting-studio',
+      'code-lab','library','observatory','greenhouse','server-closet',
+      'atelier','brewery','blacksmith-forge','photography-darkroom','music-recording-booth',
+      'glassblowing-studio','ceramics-studio','mechanics-garage','paint-studio','leather-workshop',
+      'brass-instrument-shop','watchmaker-bench','cartography-room','apothecary','textile-loom-room',
+      'luthier-shop','printmaking-studio','boatbuilding-shed','jewelry-bench','cobbler-shop',
+      'taxidermy-studio','butterfly-collection-room','alchemist-laboratory','cartoonist-studio','radio-station',
+      'brewery-yeast-lab','ceramic-3d-printer-lab','cnc-mill-cell','dye-vat-room','herbalist-drying-room',
+      'coffee-roastery','cheese-cave','recording-mastering-suite','miniature-painter-studio','clockmaker-workshop',
+      'magicians-prep-room','naturalist-field-station','cryptographer-room','submarine-control-room','zen-tea-room'
+    ];
+
+    // FNV-1a 32-bit. Identical to the algorithm sketch in
+    // docs/room-catalog.md so JS, Python, etc. agree on assignments.
+    function fnv1a32(str) {
+      let h = 0x811c9dc5;
+      for (let i = 0; i < str.length; i++) {
+        h ^= str.charCodeAt(i);
+        h = Math.imul(h, 0x01000193) >>> 0;
+      }
+      return h >>> 0;
+    }
+    function assignRoom(projectId) {
+      return ROOM_CATALOG[fnv1a32(projectId) % ROOM_CATALOG.length];
+    }
+
+    // ----------------------------------------------------------------
+    // Data loading: try live fetch, fall back to embedded JSON.
+    // ----------------------------------------------------------------
+    async function loadProjects() {
+      try {
+        const r = await fetch('../data/projects.json', { cache: 'no-cache' });
+        if (r.ok) return { data: await r.json(), source: 'fetch' };
+      } catch (_) { /* fall through to embedded */ }
+      const el = document.getElementById('projects-data');
+      return { data: JSON.parse(el.textContent), source: 'embedded' };
+    }
+
+    // ----------------------------------------------------------------
+    // Procedural CanvasTextures. All tile via RepeatWrapping.
+    // Kept small (256-512px) so total memory stays light.
+    // ----------------------------------------------------------------
+    function brickTexture({size=512, brickW=80, brickH=28, mortar='#3a2a22', baseR=140, baseG=72, baseB=58, jitter=30} = {}) {
+      const c = document.createElement('canvas');
+      c.width = c.height = size;
+      const ctx = c.getContext('2d');
+      ctx.fillStyle = mortar;
+      ctx.fillRect(0, 0, size, size);
+      for (let y = 0, row = 0; y < size + brickH; y += brickH, row++) {
+        const offset = (row % 2) * (brickW / 2);
+        for (let x = -brickW; x < size + brickW; x += brickW) {
+          const bx = x + offset;
+          const r = baseR + Math.floor((Math.random() - 0.5) * jitter * 2);
+          const g = baseG + Math.floor((Math.random() - 0.5) * jitter);
+          const b = baseB + Math.floor((Math.random() - 0.5) * jitter);
+          ctx.fillStyle = `rgb(${r},${g},${b})`;
+          ctx.fillRect(bx + 2, y + 2, brickW - 4, brickH - 4);
+          // subtle highlight on top edge
+          ctx.fillStyle = `rgba(255,220,180,0.08)`;
+          ctx.fillRect(bx + 2, y + 2, brickW - 4, 2);
+        }
+      }
+      const tex = new THREE.CanvasTexture(c);
+      tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+      tex.colorSpace = THREE.SRGBColorSpace;
+      return tex;
+    }
+
+    function woodTexture({size=512, base='#6b3f24', dark='#3a1f10', stripes=14} = {}) {
+      const c = document.createElement('canvas');
+      c.width = c.height = size;
+      const ctx = c.getContext('2d');
+      ctx.fillStyle = base;
+      ctx.fillRect(0, 0, size, size);
+      const plankH = size / stripes;
+      for (let i = 0; i < stripes; i++) {
+        const y = i * plankH;
+        // plank tint variation
+        const tint = Math.floor((Math.random() - 0.5) * 25);
+        ctx.fillStyle = `rgba(${tint > 0 ? 60+tint : 30-tint},${tint > 0 ? 35+tint : 20},${15},0.4)`;
+        ctx.fillRect(0, y, size, plankH);
+        // dark seam
+        ctx.fillStyle = dark;
+        ctx.fillRect(0, y, size, 2);
+        // grain lines
+        ctx.strokeStyle = 'rgba(20,10,5,0.18)';
+        ctx.lineWidth = 1;
+        for (let g = 0; g < 3; g++) {
+          const gy = y + 4 + Math.random() * (plankH - 8);
+          ctx.beginPath();
+          ctx.moveTo(0, gy);
+          for (let x = 0; x < size; x += 24) {
+            ctx.lineTo(x, gy + (Math.random() - 0.5) * 2);
+          }
+          ctx.stroke();
+        }
+      }
+      const tex = new THREE.CanvasTexture(c);
+      tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+      tex.colorSpace = THREE.SRGBColorSpace;
+      return tex;
+    }
+
+    function plasterTexture({size=512, base='#d8c8a8', noise=15} = {}) {
+      const c = document.createElement('canvas');
+      c.width = c.height = size;
+      const ctx = c.getContext('2d');
+      ctx.fillStyle = base;
+      ctx.fillRect(0, 0, size, size);
+      const img = ctx.getImageData(0, 0, size, size);
+      const d = img.data;
+      for (let i = 0; i < d.length; i += 4) {
+        const n = (Math.random() - 0.5) * noise;
+        d[i]   = Math.max(0, Math.min(255, d[i]   + n));
+        d[i+1] = Math.max(0, Math.min(255, d[i+1] + n));
+        d[i+2] = Math.max(0, Math.min(255, d[i+2] + n));
+      }
+      ctx.putImageData(img, 0, 0);
+      const tex = new THREE.CanvasTexture(c);
+      tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+      tex.colorSpace = THREE.SRGBColorSpace;
+      return tex;
+    }
+
+    // ----------------------------------------------------------------
+    // Door builder. Each door is a Group with:
+    //   - frame (dark stained wood box around the panel)
+    //   - panel (medium wood, slight inward bevel via two planes)
+    //   - label plane above with project name + status shape
+    // The Group's userData carries the project record + entry pose so
+    // raycaster results in lobby code stay clean.
+    // ----------------------------------------------------------------
+    const STATUS_GLYPHS = {
+      shipped: { shape: 'circle',   color: '#5fc36a', label: 'Operational' },
+      active:  { shape: 'square',   color: '#e3a23a', label: 'In Build'    },
+      blocked: { shape: 'triangle', color: '#c44c4c', label: 'Blocked'     }
+    };
+
+    function doorLabelTexture(project) {
+      const w = 1024, h = 256;
+      const c = document.createElement('canvas');
+      c.width = w; c.height = h;
+      const ctx = c.getContext('2d');
+      // brass plaque background — warm cream that contrasts with brick
+      const grad = ctx.createLinearGradient(0, 0, 0, h);
+      grad.addColorStop(0, '#e8d8a8');
+      grad.addColorStop(1, '#c8a868');
+      ctx.fillStyle = grad;
+      ctx.fillRect(0, 0, w, h);
+      // dark inner border for definition against the brick
+      ctx.strokeStyle = '#3a2410';
+      ctx.lineWidth = 8;
+      ctx.strokeRect(10, 10, w - 20, h - 20);
+      // brass edge
+      ctx.strokeStyle = '#a07a3a';
+      ctx.lineWidth = 3;
+      ctx.strokeRect(14, 14, w - 28, h - 28);
+
+      // status shape (left side)
+      const glyph = STATUS_GLYPHS[project.status] || STATUS_GLYPHS.active;
+      const cx = 90, cy = h / 2, sz = 56;
+      ctx.fillStyle = glyph.color;
+      ctx.strokeStyle = '#1a1108';
+      ctx.lineWidth = 5;
+      if (glyph.shape === 'circle') {
+        ctx.beginPath(); ctx.arc(cx, cy, sz/2, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+      } else if (glyph.shape === 'square') {
+        ctx.fillRect(cx - sz/2, cy - sz/2, sz, sz);
+        ctx.strokeRect(cx - sz/2, cy - sz/2, sz, sz);
+      } else {
+        // equilateral triangle pointing up
+        ctx.beginPath();
+        ctx.moveTo(cx, cy - sz/2);
+        ctx.lineTo(cx + sz/2, cy + sz/2);
+        ctx.lineTo(cx - sz/2, cy + sz/2);
+        ctx.closePath();
+        ctx.fill(); ctx.stroke();
+      }
+
+      // name — dark on cream for legibility against brick
+      ctx.fillStyle = '#1a1108';
+      ctx.textBaseline = 'middle';
+      ctx.font = '600 56px -apple-system, "Segoe UI", Helvetica, sans-serif';
+      // wrap long names
+      const maxTextW = w - 200;
+      const words = project.name.split(/\s+/);
+      const lines = [];
+      let line = '';
+      for (const word of words) {
+        const candidate = line ? line + ' ' + word : word;
+        if (ctx.measureText(candidate).width > maxTextW && line) {
+          lines.push(line); line = word;
+        } else {
+          line = candidate;
+        }
+      }
+      if (line) lines.push(line);
+      if (lines.length > 2) { lines.length = 2; lines[1] = lines[1].slice(0, -1) + '...'; }
+      const fontSize = lines.length === 1 ? 56 : 42;
+      ctx.font = `600 ${fontSize}px -apple-system, "Segoe UI", Helvetica, sans-serif`;
+      const totalH = lines.length * fontSize * 1.1;
+      let ty = h/2 - totalH/2 + fontSize/2;
+      for (const ln of lines) {
+        ctx.fillText(ln, 160, ty);
+        ty += fontSize * 1.1;
+      }
+
+      const tex = new THREE.CanvasTexture(c);
+      tex.colorSpace = THREE.SRGBColorSpace;
+      tex.anisotropy = 8;
+      return tex;
+    }
+
+    function buildDoor(project, woodTex) {
+      const group = new THREE.Group();
+      group.name = `door:${project.id}`;
+
+      // panel
+      const panelW = 1.4, panelH = 2.4, panelD = 0.08;
+      const panelMat = new THREE.MeshStandardMaterial({
+        map: woodTex,
+        color: 0x8a5a35,
+        roughness: 0.85,
+        metalness: 0.05
+      });
+      const panel = new THREE.Mesh(
+        new THREE.BoxGeometry(panelW, panelH, panelD),
+        panelMat
+      );
+      panel.position.y = panelH / 2;
+      group.add(panel);
+
+      // frame: thin box around panel
+      const frameMat = new THREE.MeshStandardMaterial({
+        color: 0x2c1a0e, roughness: 0.95, metalness: 0.0
+      });
+      const frameDepth = 0.14, frameThick = 0.12;
+      const top = new THREE.Mesh(new THREE.BoxGeometry(panelW + frameThick * 2, frameThick, frameDepth), frameMat);
+      top.position.set(0, panelH + frameThick/2, 0);
+      group.add(top);
+      const left = new THREE.Mesh(new THREE.BoxGeometry(frameThick, panelH + frameThick * 2, frameDepth), frameMat);
+      left.position.set(-panelW/2 - frameThick/2, panelH/2 + frameThick/2 - frameThick/2, 0);
+      group.add(left);
+      const right = left.clone();
+      right.position.x = panelW/2 + frameThick/2;
+      group.add(right);
+
+      // doorknob
+      const knobMat = new THREE.MeshStandardMaterial({ color: 0xb38b3d, roughness: 0.4, metalness: 0.6 });
+      const knob = new THREE.Mesh(new THREE.SphereGeometry(0.06, 16, 12), knobMat);
+      knob.position.set(panelW/2 - 0.18, panelH/2, panelD/2 + 0.02);
+      group.add(knob);
+
+      // label plaque above the frame
+      const labelTex = doorLabelTexture(project);
+      const labelMat = new THREE.MeshBasicMaterial({ map: labelTex, transparent: false });
+      const labelW = panelW + frameThick * 2 + 0.4;
+      const labelH = labelW * (256/1024);
+      const label = new THREE.Mesh(new THREE.PlaneGeometry(labelW, labelH), labelMat);
+      label.position.set(0, panelH + frameThick + labelH/2 + 0.1, 0.01);
+      group.add(label);
+
+      // raycast target — a single oversized plane that catches clicks
+      // on either the panel or the label without the per-mesh hit
+      // ambiguity that nested meshes would create.
+      const hitMat = new THREE.MeshBasicMaterial({ visible: false });
+      const hit = new THREE.Mesh(
+        new THREE.PlaneGeometry(panelW + frameThick * 2 + 0.4, panelH + frameThick * 2 + labelH + 0.2),
+        hitMat
+      );
+      hit.position.set(0, (panelH + frameThick + labelH + 0.1) / 2 + 0.1, 0.02);
+      hit.userData.isDoorHit = true;
+      group.add(hit);
+
+      group.userData = {
+        project,
+        hitMesh: hit,
+        panel,
+        label,
+        // for hover scale-up
+        baseScale: 1,
+        hoverScale: 1.06,
+        // entry pose for walk-through (filled in by lobby builder)
+        entryPosition: null,
+        entryLookAt: null
+      };
+      return group;
+    }
+
+    // ----------------------------------------------------------------
+    // Lobby builder.
+    // 14 doors clustered by domain at fixed angular ranges.
+    // ----------------------------------------------------------------
+    const DOMAIN_CLUSTER = {
+      framework:      { centerDeg: 270, spanDeg: 30 },
+      app:            { centerDeg:   0, spanDeg: 80 },
+      mcp:            { centerDeg:  90, spanDeg: 40 },
+      infrastructure: { centerDeg: 180, spanDeg: 40 }
+    };
+    const DOMAIN_ORDER = ['framework', 'app', 'mcp', 'infrastructure'];
+
+    function floorStations(projectsData) {
+      const floor = projectsData.projects.filter(p =>
+        p.status === 'shipped' || p.status === 'active' || p.status === 'blocked'
+      );
+      // Sort by domain order, then alphabetically by id within domain.
+      floor.sort((a, b) => {
+        const da = DOMAIN_ORDER.indexOf(a.domain);
+        const db = DOMAIN_ORDER.indexOf(b.domain);
+        if (da !== db) return da - db;
+        return a.id.localeCompare(b.id);
+      });
+      return floor;
+    }
+
+    function doorAnglesByDomain(projects) {
+      // Group projects by domain, then spread within each cluster's arc.
+      const byDomain = {};
+      for (const p of projects) {
+        (byDomain[p.domain] ||= []).push(p);
+      }
+      const result = []; // [{ project, angleDeg }]
+      for (const domain of DOMAIN_ORDER) {
+        const list = byDomain[domain] || [];
+        if (!list.length) continue;
+        const cluster = DOMAIN_CLUSTER[domain];
+        const { centerDeg, spanDeg } = cluster;
+        const n = list.length;
+        // Distribute n doors centered on centerDeg, spanning spanDeg.
+        // For n=1, just centerDeg; for n>1, evenly spaced.
+        const step = n > 1 ? spanDeg / (n - 1) : 0;
+        const start = centerDeg - spanDeg / 2;
+        for (let i = 0; i < n; i++) {
+          const angleDeg = n === 1 ? centerDeg : start + step * i;
+          result.push({ project: list[i], angleDeg });
+        }
+      }
+      return result;
+    }
+
+    function buildLobby(projectsData) {
+      const scene = new THREE.Scene();
+      scene.background = new THREE.Color(0x18110a);
+      scene.fog = new THREE.Fog(0x18110a, 12, 26);
+
+      const radius = 8;
+      const height = 6;
+
+      // floor — warm wood
+      const floorWood = woodTexture({ base: '#5a3522', dark: '#2a1408', stripes: 10 });
+      floorWood.repeat.set(4, 4);
+      const floorMat = new THREE.MeshStandardMaterial({
+        map: floorWood, color: 0xa07050, roughness: 0.9, metalness: 0.0
+      });
+      const floor = new THREE.Mesh(new THREE.CircleGeometry(radius, 64), floorMat);
+      floor.rotation.x = -Math.PI / 2;
+      floor.position.y = 0;
+      scene.add(floor);
+
+      // walls — brick cylinder, interior visible
+      const brick = brickTexture({});
+      brick.repeat.set(6, 2);
+      const wallMat = new THREE.MeshStandardMaterial({
+        map: brick, color: 0xb08070, roughness: 0.95, metalness: 0.0, side: THREE.BackSide
+      });
+      const wall = new THREE.Mesh(
+        new THREE.CylinderGeometry(radius, radius, height, 64, 1, true),
+        wallMat
+      );
+      wall.position.y = height / 2;
+      scene.add(wall);
+
+      // ceiling — plaster, dimmer
+      const plaster = plasterTexture({ base: '#a08660', noise: 18 });
+      plaster.repeat.set(2, 2);
+      const ceilingMat = new THREE.MeshStandardMaterial({
+        map: plaster, color: 0x705030, roughness: 1.0, metalness: 0.0
+      });
+      const ceiling = new THREE.Mesh(new THREE.CircleGeometry(radius, 64), ceilingMat);
+      ceiling.rotation.x = Math.PI / 2;
+      ceiling.position.y = height;
+      scene.add(ceiling);
+
+      // exposed wooden beams across the ceiling
+      const beamWood = new THREE.MeshStandardMaterial({
+        color: 0x3a2410, roughness: 0.9, metalness: 0.0
+      });
+      const beamCount = 5;
+      for (let i = 0; i < beamCount; i++) {
+        const t = (i + 1) / (beamCount + 1);
+        const x = (t - 0.5) * 2 * radius;
+        const beam = new THREE.Mesh(
+          new THREE.BoxGeometry(0.4, 0.35, 2 * Math.sqrt(Math.max(0, radius*radius - x*x))),
+          beamWood
+        );
+        beam.position.set(x, height - 0.25, 0);
+        scene.add(beam);
+      }
+
+      // central pendant light (visible body + light source)
+      const pendantGroup = new THREE.Group();
+      const cordMat = new THREE.MeshStandardMaterial({ color: 0x1a1108, roughness: 1.0 });
+      const cord = new THREE.Mesh(new THREE.CylinderGeometry(0.02, 0.02, 1.2, 8), cordMat);
+      cord.position.y = height - 0.6;
+      pendantGroup.add(cord);
+      const shadeMat = new THREE.MeshStandardMaterial({
+        color: 0x4a2a14, emissive: 0xff9a40, emissiveIntensity: 0.65, roughness: 0.7
+      });
+      const shade = new THREE.Mesh(new THREE.ConeGeometry(0.45, 0.55, 24, 1, true), shadeMat);
+      shade.position.y = height - 1.3;
+      shade.material.side = THREE.DoubleSide;
+      pendantGroup.add(shade);
+      // glowing bulb visible from below
+      const bulbMat = new THREE.MeshBasicMaterial({ color: 0xffd28a });
+      const bulb = new THREE.Mesh(new THREE.SphereGeometry(0.12, 16, 12), bulbMat);
+      bulb.position.y = height - 1.5;
+      pendantGroup.add(bulb);
+      scene.add(pendantGroup);
+
+      const pendantLight = new THREE.PointLight(0xffb070, 6.5, 26, 1.4);
+      pendantLight.position.set(0, height - 1.5, 0);
+      scene.add(pendantLight);
+
+      // ambient warm fill so the brick reads even in shadow
+      scene.add(new THREE.AmbientLight(0x6a4828, 0.95));
+      // a hint of cool from above for contrast
+      const topFill = new THREE.HemisphereLight(0x886644, 0x1a0d05, 0.55);
+      scene.add(topFill);
+
+      // wall sconces — one per cluster, just past its center, helping
+      // readers orient by warmth and giving doors a bit of side light
+      for (const dom of DOMAIN_ORDER) {
+        const c = DOMAIN_CLUSTER[dom];
+        const a = THREE.MathUtils.degToRad(c.centerDeg);
+        const sconceLight = new THREE.PointLight(0xff9a55, 3.2, 16, 1.6);
+        sconceLight.position.set(
+          Math.cos(a) * (radius - 0.7),
+          height - 1.6,
+          Math.sin(a) * (radius - 0.7)
+        );
+        scene.add(sconceLight);
+        // tiny visible bulb
+        const sb = new THREE.Mesh(
+          new THREE.SphereGeometry(0.07, 10, 8),
+          new THREE.MeshBasicMaterial({ color: 0xffc890 })
+        );
+        sb.position.copy(sconceLight.position);
+        scene.add(sb);
+      }
+
+      // doors
+      const floorProjects = floorStations(projectsData);
+      const placements = doorAnglesByDomain(floorProjects);
+      const doorWood = woodTexture({ base: '#7a4d2c', dark: '#2a1408', stripes: 6 });
+      const doors = [];
+      for (const { project, angleDeg } of placements) {
+        const door = buildDoor(project, doorWood);
+        const a = THREE.MathUtils.degToRad(angleDeg);
+        // Place door against the wall, facing the center.
+        const dx = Math.cos(a) * (radius - 0.06);
+        const dz = Math.sin(a) * (radius - 0.06);
+        door.position.set(dx, 0, dz);
+        // Three.js Object3D.lookAt for non-camera objects orients the
+        // object's +Z toward the target. The door's front (+Z carries
+        // the knob and the label plaque), so we want it pointing at
+        // the camera. Target must be at the SAME y as the door,
+        // otherwise the door tilts upward and the label drifts
+        // beyond the wall radius and is occluded by the wall.
+        door.lookAt(0, 0, 0);
+
+        // Entry pose for walk-through animation (defined here so the
+        // animator doesn't have to recompute trig).
+        door.userData.entryPosition = new THREE.Vector3(dx * 0.55, 1.6, dz * 0.55);
+        door.userData.entryLookAt = new THREE.Vector3(dx, 1.6, dz);
+
+        scene.add(door);
+        doors.push(door);
+      }
+
+      // a faint floor disc/area rug under the camera for cognitive anchor
+      const rugMat = new THREE.MeshStandardMaterial({
+        color: 0x5a2f1a, roughness: 1.0, metalness: 0.0
+      });
+      const rug = new THREE.Mesh(new THREE.CircleGeometry(2.2, 48), rugMat);
+      rug.rotation.x = -Math.PI / 2;
+      rug.position.y = 0.005;
+      scene.add(rug);
+
+      return { scene, doors };
+    }
+
+    // ----------------------------------------------------------------
+    // CameraController — mouse-move passive pan + click-drag fine control.
+    // Camera stays at origin (or wherever the SceneManager places it);
+    // we only mutate its yaw (and a little pitch).
+    // ----------------------------------------------------------------
+    class CameraController {
+      constructor(camera, dom) {
+        this.camera = camera;
+        this.dom = dom;
+        this.yaw = 0;      // radians, around Y
+        this.pitch = 0;    // radians, clamped
+        this.targetYaw = 0;
+        this.targetPitch = 0;
+        this.dragging = false;
+        this.dragStart = { x: 0, y: 0, yaw: 0, pitch: 0 };
+        this.lastMouse = { x: 0.5, y: 0.5 };
+        this.maxPitch = THREE.MathUtils.degToRad(35);
+        this.enabled = true;
+        this._bind();
+      }
+      _bind() {
+        const d = this.dom;
+        d.addEventListener('mousemove', this._onMove = (e) => {
+          const rect = d.getBoundingClientRect();
+          this.lastMouse.x = (e.clientX - rect.left) / rect.width;
+          this.lastMouse.y = (e.clientY - rect.top)  / rect.height;
+          if (this.dragging) {
+            const dx = (e.clientX - this.dragStart.x) / rect.width;
+            const dy = (e.clientY - this.dragStart.y) / rect.height;
+            // drag-gain: a full-viewport drag rotates ~120deg yaw / ~60deg pitch
+            this.targetYaw   = this.dragStart.yaw   - dx * THREE.MathUtils.degToRad(180);
+            this.targetPitch = this.dragStart.pitch - dy * THREE.MathUtils.degToRad(80);
+            this.targetPitch = THREE.MathUtils.clamp(this.targetPitch, -this.maxPitch, this.maxPitch);
+          }
+        });
+        d.addEventListener('mousedown', this._onDown = (e) => {
+          if (e.button !== 0) return;
+          this.dragging = true;
+          this.dragStart.x = e.clientX; this.dragStart.y = e.clientY;
+          this.dragStart.yaw = this.targetYaw;
+          this.dragStart.pitch = this.targetPitch;
+        });
+        window.addEventListener('mouseup', this._onUp = () => { this.dragging = false; });
+      }
+      setHeading(yawRad, pitchRad = 0) {
+        this.yaw = this.targetYaw = yawRad;
+        this.pitch = this.targetPitch = pitchRad;
+      }
+      update(dt) {
+        if (!this.enabled) return;
+        if (!this.dragging) {
+          // passive mouse-move pan: rotate toward mouse x, only when
+          // mouse is in the middle vertical third of the screen.
+          if (this.lastMouse.y > 0.33 && this.lastMouse.y < 0.67) {
+            // map x from [0,1] to [-1,1], then to small angular velocity
+            const xCenter = this.lastMouse.x - 0.5;
+            const yawSpeed = xCenter * THREE.MathUtils.degToRad(60); // deg/s at edge
+            this.targetYaw -= yawSpeed * dt;
+          }
+          // slight pitch toward y — encourages looking up/down softly
+          if (this.lastMouse.y < 0.33) {
+            this.targetPitch = THREE.MathUtils.lerp(this.targetPitch, this.maxPitch * 0.4, 1 - Math.exp(-dt * 2));
+          } else if (this.lastMouse.y > 0.67) {
+            this.targetPitch = THREE.MathUtils.lerp(this.targetPitch, -this.maxPitch * 0.4, 1 - Math.exp(-dt * 2));
+          } else {
+            this.targetPitch = THREE.MathUtils.lerp(this.targetPitch, 0, 1 - Math.exp(-dt * 1.5));
+          }
+        }
+        // smooth follow toward targets
+        const k = 1 - Math.exp(-dt * 8);
+        this.yaw   = THREE.MathUtils.lerp(this.yaw,   this.targetYaw,   k);
+        this.pitch = THREE.MathUtils.lerp(this.pitch, this.targetPitch, k);
+        this._apply();
+      }
+      _apply() {
+        // Build camera orientation from yaw + pitch. Camera looks down -Z by default.
+        // We construct a forward vector and use lookAt for stability.
+        const cp = Math.cos(this.pitch), sp = Math.sin(this.pitch);
+        const cy = Math.cos(this.yaw),   sy = Math.sin(this.yaw);
+        const fwd = new THREE.Vector3(sy * cp, sp, -cy * cp);
+        const tgt = this.camera.position.clone().add(fwd);
+        this.camera.up.set(0, 1, 0);
+        this.camera.lookAt(tgt);
+      }
+    }
+
+    // ----------------------------------------------------------------
+    // HoverPicker — raycaster against door hit-meshes.
+    // ----------------------------------------------------------------
+    class HoverPicker {
+      constructor(camera, dom) {
+        this.camera = camera;
+        this.dom = dom;
+        this.raycaster = new THREE.Raycaster();
+        this.ndc = new THREE.Vector2();
+        this.hovered = null;
+        this.targets = []; // door Groups
+        dom.addEventListener('mousemove', (e) => {
+          const rect = dom.getBoundingClientRect();
+          this.ndc.x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
+          this.ndc.y = -((e.clientY - rect.top)  / rect.height) * 2 + 1;
+        });
+      }
+      setTargets(doors) {
+        this.targets = doors;
+        this.hovered = null;
+      }
+      update() {
+        if (!this.targets.length) { this._setHover(null); return; }
+        this.raycaster.setFromCamera(this.ndc, this.camera);
+        // raycast against hit meshes only
+        const hits = this.raycaster.intersectObjects(
+          this.targets.map(d => d.userData.hitMesh), false
+        );
+        let next = null;
+        if (hits.length) {
+          // ascend to the door Group
+          let o = hits[0].object;
+          while (o && !o.userData?.project) o = o.parent;
+          next = o || null;
+        }
+        this._setHover(next);
+      }
+      _setHover(next) {
+        if (next === this.hovered) return;
+        if (this.hovered) this._applyHover(this.hovered, false);
+        this.hovered = next;
+        if (this.hovered) this._applyHover(this.hovered, true);
+        this.dom.style.cursor = this.hovered ? 'pointer' : 'default';
+      }
+      _applyHover(door, on) {
+        const s = on ? door.userData.hoverScale : door.userData.baseScale;
+        door.scale.setScalar(s);
+        // brighten the panel emissive slightly
+        if (door.userData.panel) {
+          const m = door.userData.panel.material;
+          m.emissive = m.emissive || new THREE.Color(0x000000);
+          m.emissive.setHex(on ? 0x402010 : 0x000000);
+        }
+      }
+    }
+
+    // ----------------------------------------------------------------
+    // Room shell — reusable box-shaped room geometry. Per-room builders
+    // call this to get floor / walls / ceiling, then add decor + a
+    // whiteboard on top.
+    //
+    // Coordinate convention for rooms:
+    //   - room is axis-aligned, dims = w (X) by d (Z) by h (Y)
+    //   - camera enters at z = +d/2 - 0.4 looking toward -Z
+    //     (the FRONT wall, where the whiteboard sits)
+    //   - back-door sits on the back wall at z = +d/2
+    //   - +X is "right" of camera entry, -X is "left"
+    // ----------------------------------------------------------------
+    function makeRoomShell(opts) {
+      const {
+        width = 6.5, depth = 6.5, height = 4.0,
+        floorMaterial, ceilingMaterial,
+        wallFront, wallBack, wallLeft, wallRight,  // materials, may differ
+        fogColor = 0x100808, fogNear = 5, fogFar = 22
+      } = opts;
+
+      const scene = new THREE.Scene();
+      scene.background = new THREE.Color(fogColor);
+      scene.fog = new THREE.Fog(fogColor, fogNear, fogFar);
+
+      const floor = new THREE.Mesh(new THREE.PlaneGeometry(width, depth), floorMaterial);
+      floor.rotation.x = -Math.PI / 2;
+      scene.add(floor);
+
+      const ceiling = new THREE.Mesh(new THREE.PlaneGeometry(width, depth), ceilingMaterial);
+      ceiling.rotation.x = Math.PI / 2;
+      ceiling.position.y = height;
+      scene.add(ceiling);
+
+      // Walls: each is a plane facing inward.
+      const mkWall = (mat, w, h, pos, rotY) => {
+        const m = new THREE.Mesh(new THREE.PlaneGeometry(w, h), mat);
+        m.position.set(pos.x, pos.y, pos.z);
+        m.rotation.y = rotY;
+        return m;
+      };
+      // front wall (camera looks at): z = -depth/2, normal +Z
+      scene.add(mkWall(wallFront, width, height, { x: 0, y: height/2, z: -depth/2 }, 0));
+      // back wall (behind camera): z = +depth/2, normal -Z
+      scene.add(mkWall(wallBack, width, height, { x: 0, y: height/2, z: +depth/2 }, Math.PI));
+      // left wall: x = -width/2, normal +X
+      scene.add(mkWall(wallLeft, depth, height, { x: -width/2, y: height/2, z: 0 }, Math.PI / 2));
+      // right wall: x = +width/2, normal -X
+      scene.add(mkWall(wallRight, depth, height, { x: +width/2, y: height/2, z: 0 }, -Math.PI / 2));
+
+      return { scene, width, depth, height };
+    }
+
+    // Build a "back door" — same visual style as the lobby doors, but
+    // labeled "Lobby" and not driven from project data. Positioned on
+    // the back wall of a room (z = +depth/2), facing the camera (+Z
+    // pointing toward -Z, i.e. inward). userData mirrors a normal door
+    // so HoverPicker / click handler don't need to special-case it.
+    function buildBackDoor(roomDepth, doorWoodTex) {
+      // Build a synthetic "project record" so doorLabelTexture renders
+      // something distinct for the back door.
+      const fakeProject = {
+        id: '__back__',
+        name: 'Back to Lobby',
+        status: 'shipped',
+      };
+      const door = buildDoor(fakeProject, doorWoodTex);
+      // Override label glyph color: use a neutral marker instead of
+      // shipped-green so it doesn't claim a project status.
+      // (Cheap path: just rebuild the label texture with a custom glyph.)
+      const labelCanvas = document.createElement('canvas');
+      labelCanvas.width = 1024; labelCanvas.height = 256;
+      const ctx = labelCanvas.getContext('2d');
+      const grad = ctx.createLinearGradient(0, 0, 0, 256);
+      grad.addColorStop(0, '#e8d8a8'); grad.addColorStop(1, '#c8a868');
+      ctx.fillStyle = grad; ctx.fillRect(0, 0, 1024, 256);
+      ctx.strokeStyle = '#3a2410'; ctx.lineWidth = 8;
+      ctx.strokeRect(10, 10, 1004, 236);
+      ctx.strokeStyle = '#a07a3a'; ctx.lineWidth = 3;
+      ctx.strokeRect(14, 14, 996, 228);
+      // arrow glyph pointing left
+      ctx.strokeStyle = '#1a1108'; ctx.fillStyle = '#1a1108'; ctx.lineWidth = 5;
+      ctx.beginPath();
+      ctx.moveTo(140, 128); ctx.lineTo(70, 128);
+      ctx.moveTo(95, 100); ctx.lineTo(70, 128); ctx.lineTo(95, 156);
+      ctx.stroke();
+      ctx.font = '600 56px -apple-system, "Segoe UI", Helvetica, sans-serif';
+      ctx.textBaseline = 'middle';
+      ctx.fillText('Back to Lobby', 180, 128);
+      const newTex = new THREE.CanvasTexture(labelCanvas);
+      newTex.colorSpace = THREE.SRGBColorSpace;
+      newTex.anisotropy = 8;
+      door.userData.label.material.map = newTex;
+      door.userData.label.material.needsUpdate = true;
+
+      // Place on back wall, facing -Z (i.e. toward room center / -Z direction).
+      // Door geometry default front is +Z, and we want +Z to point at -Z world,
+      // so rotate 180 deg around Y.
+      door.position.set(0, 0, roomDepth / 2 - 0.06);
+      door.rotation.y = Math.PI;
+
+      door.userData.isBack = true;
+      // Walk-out animation goes from current camera pose to this entry pose.
+      door.userData.entryPosition = new THREE.Vector3(0, 1.6, roomDepth / 2 - 1.4);
+      door.userData.entryLookAt = new THREE.Vector3(0, 1.6, roomDepth / 2);
+
+      return door;
+    }
+
+    // ----------------------------------------------------------------
+    // ROOM_BUILDERS — registry keyed by room_type id. Each builder is
+    //   (project, roomTypeId, sharedTextures) -> { scene, width, depth,
+    //     height, backDoor, entryYaw, doors:[backDoor] }
+    // Furnished rooms register their own entries below; everything else
+    // falls back to STUB_ROOM_BUILDER.
+    // ----------------------------------------------------------------
+    const ROOM_BUILDERS = {};
+
+    // Cache of materials/textures that are safe to share across rooms.
+    function makeSharedTextures() {
+      return {
+        doorWood: woodTexture({ base: '#7a4d2c', dark: '#2a1408', stripes: 6 }),
+        lobbyFloorWood: null  // for visual continuity in stubs, reuse lobby palette
+      };
+    }
+
+    // Stub room — placeholder for any room_type that isn't furnished yet.
+    // Uses the lobby's procedural materials so it's cheap and visually
+    // recognizable as "you stepped through, but this space isn't built".
+    function STUB_ROOM_BUILDER(project, roomTypeId, shared) {
+      // procedural materials — wood floor + plaster walls + plaster ceiling
+      const floorWood = woodTexture({ base: '#4a3022', dark: '#26140a', stripes: 8 });
+      floorWood.repeat.set(2, 2);
+      const floorMat = new THREE.MeshStandardMaterial({
+        map: floorWood, color: 0x7a5238, roughness: 0.9
+      });
+      const plaster = plasterTexture({ base: '#9a826a', noise: 16 });
+      plaster.repeat.set(1.5, 1);
+      const wallMat = new THREE.MeshStandardMaterial({
+        map: plaster, color: 0x8a705a, roughness: 1.0, side: THREE.FrontSide
+      });
+      const ceilingMat = new THREE.MeshStandardMaterial({
+        color: 0x3a2818, roughness: 1.0
+      });
+
+      const shell = makeRoomShell({
+        width: 6, depth: 6, height: 3.8,
+        floorMaterial: floorMat,
+        ceilingMaterial: ceilingMat,
+        wallFront: wallMat, wallBack: wallMat,
+        wallLeft: wallMat, wallRight: wallMat,
+        fogColor: 0x1a120a, fogNear: 4, fogFar: 18
+      });
+      const scene = shell.scene;
+
+      // a warm pendant
+      const bulb = new THREE.PointLight(0xffa658, 1.6, 12, 1.7);
+      bulb.position.set(0, shell.height - 0.6, 0);
+      scene.add(bulb);
+      const bulbMesh = new THREE.Mesh(
+        new THREE.SphereGeometry(0.1, 14, 10),
+        new THREE.MeshBasicMaterial({ color: 0xffd49a })
+      );
+      bulbMesh.position.copy(bulb.position);
+      scene.add(bulbMesh);
+      scene.add(new THREE.AmbientLight(0x4a3018, 0.45));
+
+      // sign on the front wall
+      const sign = document.createElement('canvas');
+      sign.width = 1024; sign.height = 512;
+      const sctx = sign.getContext('2d');
+      sctx.fillStyle = '#1a1108'; sctx.fillRect(0, 0, 1024, 512);
+      sctx.strokeStyle = '#a07a3a'; sctx.lineWidth = 8;
+      sctx.strokeRect(16, 16, 992, 480);
+      sctx.fillStyle = '#f0e6d6';
+      sctx.textBaseline = 'middle';
+      sctx.textAlign = 'center';
+      sctx.font = '600 56px -apple-system, "Segoe UI", Helvetica, sans-serif';
+      sctx.fillText('This room is not yet built', 512, 200);
+      sctx.font = '400 44px -apple-system, "Segoe UI", Helvetica, sans-serif';
+      sctx.fillStyle = '#c7b48a';
+      sctx.fillText(`type: ${roomTypeId}`, 512, 290);
+      sctx.font = '400 28px -apple-system, "Segoe UI", Helvetica, sans-serif';
+      sctx.fillStyle = '#a08660';
+      sctx.fillText(project.name, 512, 360);
+      sctx.fillText(project.tagline || '', 512, 410);
+      const signTex = new THREE.CanvasTexture(sign);
+      signTex.colorSpace = THREE.SRGBColorSpace;
+      signTex.anisotropy = 8;
+      const signW = 3.2, signH = signW * (512/1024);
+      const signMesh = new THREE.Mesh(
+        new THREE.PlaneGeometry(signW, signH),
+        new THREE.MeshBasicMaterial({ map: signTex })
+      );
+      signMesh.position.set(0, 1.8, -shell.depth/2 + 0.02);
+      scene.add(signMesh);
+
+      // back door
+      const backDoor = buildBackDoor(shell.depth, shared.doorWood);
+      scene.add(backDoor);
+
+      return {
+        scene,
+        width: shell.width, depth: shell.depth, height: shell.height,
+        backDoor,
+        // Camera enters facing -Z (the front wall with the sign).
+        // Controller forward at yaw=0 is (sin 0, 0, -cos 0) = (0, 0, -1),
+        // i.e. -Z. So entryYaw = 0.
+        entryYaw: 0,
+        doors: [backDoor]
+      };
+    }
+
+    // Shared helper: build a generic "whiteboard" mesh placeholder.
+    // Each furnished room can replace the texture later via
+    // applyWhiteboardTexture once the data renderer lands; until then
+    // we show a dim glow so the wall doesn't read as empty.
+    function makePlaceholderWhiteboard({
+      width = 2.6, height = 1.6,
+      color = 0xf5e6c2, emissive = 0x4a3a1a, frameColor = 0x2a1d10
+    } = {}) {
+      const group = new THREE.Group();
+      const board = new THREE.Mesh(
+        new THREE.PlaneGeometry(width, height),
+        new THREE.MeshStandardMaterial({
+          color, emissive, emissiveIntensity: 0.4,
+          roughness: 0.6, metalness: 0.0
+        })
+      );
+      group.add(board);
+
+      const frameThick = 0.08;
+      const frameMat = new THREE.MeshStandardMaterial({ color: frameColor, roughness: 0.9 });
+      const top = new THREE.Mesh(new THREE.BoxGeometry(width + frameThick*2, frameThick, 0.05), frameMat);
+      top.position.set(0, height/2 + frameThick/2, -0.01);
+      group.add(top);
+      const bottom = top.clone();
+      bottom.position.y = -height/2 - frameThick/2;
+      group.add(bottom);
+      const left = new THREE.Mesh(new THREE.BoxGeometry(frameThick, height + frameThick*2, 0.05), frameMat);
+      left.position.set(-width/2 - frameThick/2, 0, -0.01);
+      group.add(left);
+      const right = left.clone();
+      right.position.x = width/2 + frameThick/2;
+      group.add(right);
+
+      group.userData = { board, frameColor };
+      return group;
+    }
+
+    // ----------------------------------------------------------------
+    // FURNISHED: photography-darkroom
+    //   solo-orchestrator -> red safelight only, painted black walls,
+    //   stainless counter, enlarger, drying line, chemistry trays,
+    //   backlit etched-glass whiteboard.
+    // ----------------------------------------------------------------
+    function buildPhotographyDarkroom(project, roomTypeId, shared) {
+      // materials
+      const blackWall = new THREE.MeshStandardMaterial({
+        color: 0x0a0808, roughness: 0.95, metalness: 0.0
+      });
+      const concrete = plasterTexture({ base: '#1a1614', noise: 8 });
+      concrete.repeat.set(3, 3);
+      const floorMat = new THREE.MeshStandardMaterial({
+        map: concrete, color: 0x121010, roughness: 1.0
+      });
+      const ceilingMat = new THREE.MeshStandardMaterial({
+        color: 0x080606, roughness: 1.0
+      });
+
+      const shell = makeRoomShell({
+        width: 6.5, depth: 6.0, height: 3.6,
+        floorMaterial: floorMat,
+        ceilingMaterial: ceilingMat,
+        wallFront: blackWall, wallBack: blackWall,
+        wallLeft: blackWall, wallRight: blackWall,
+        fogColor: 0x0a0404, fogNear: 3.5, fogFar: 14
+      });
+      const scene = shell.scene;
+      const W = shell.width, D = shell.depth, H = shell.height;
+
+      // The signature red safelight — a single low-intensity point
+      // light high near the back, color saturated red. We keep ambient
+      // VERY low so the darkroom mood lands; the whiteboard provides
+      // its own backlight so it stays readable despite the darkness.
+      const safelight = new THREE.PointLight(0xff2010, 2.4, 12, 1.6);
+      safelight.position.set(0, H - 0.5, D/2 - 0.8);
+      scene.add(safelight);
+      const safeBulb = new THREE.Mesh(
+        new THREE.SphereGeometry(0.09, 14, 10),
+        new THREE.MeshBasicMaterial({ color: 0xff5030 })
+      );
+      safeBulb.position.copy(safelight.position);
+      scene.add(safeBulb);
+      // very dim red ambient so geometry reads
+      scene.add(new THREE.AmbientLight(0x1a0606, 0.55));
+
+      // a second very dim cool spot from above the whiteboard so the
+      // data stays legible without breaking the safelight mood
+      const wbSpot = new THREE.SpotLight(0xffe0c0, 0.6, 6, Math.PI/5, 0.7, 1.4);
+      wbSpot.position.set(0, H - 0.3, -D/2 + 1.8);
+      wbSpot.target.position.set(0, 1.6, -D/2 + 0.05);
+      scene.add(wbSpot);
+      scene.add(wbSpot.target);
+
+      // stainless counter along the right wall
+      const steel = new THREE.MeshStandardMaterial({
+        color: 0x8a8e92, roughness: 0.35, metalness: 0.85
+      });
+      const counter = new THREE.Mesh(
+        new THREE.BoxGeometry(D - 0.6, 0.06, 0.7),
+        steel
+      );
+      counter.position.set(W/2 - 0.4, 0.9, 0);
+      counter.rotation.y = -Math.PI / 2;
+      // The geometry is built along X (length D-0.6); rotating around Y
+      // by -90 deg leaves it aligned with Z, which is what we want.
+      scene.add(counter);
+      // counter legs
+      const legMat = new THREE.MeshStandardMaterial({ color: 0x303336, roughness: 0.7, metalness: 0.6 });
+      const legGeo = new THREE.BoxGeometry(0.06, 0.9, 0.06);
+      for (const zp of [-D/2 + 1, 0, D/2 - 1]) {
+        for (const dx of [-0.25, 0.25]) {
+          const leg = new THREE.Mesh(legGeo, legMat);
+          leg.position.set(W/2 - 0.4 + dx, 0.45, zp);
+          scene.add(leg);
+        }
+      }
+
+      // three chemistry trays on the counter — shallow rectangles with
+      // a slightly emissive bottom so they catch the red light visibly.
+      const trayMat = new THREE.MeshStandardMaterial({
+        color: 0x2a2826, roughness: 0.6, metalness: 0.1
+      });
+      const trayLiquidMat = (hue) => new THREE.MeshStandardMaterial({
+        color: hue, roughness: 0.2, metalness: 0.0, emissive: hue, emissiveIntensity: 0.05
+      });
+      const trayLiquids = [0x3a1a1a, 0x2a1a0e, 0x1a1610];
+      for (let i = 0; i < 3; i++) {
+        const zp = -D/2 + 1.6 + i * 1.2;
+        const tray = new THREE.Mesh(new THREE.BoxGeometry(0.55, 0.04, 0.38), trayMat);
+        tray.position.set(W/2 - 0.4, 0.96, zp);
+        scene.add(tray);
+        const liquid = new THREE.Mesh(new THREE.PlaneGeometry(0.5, 0.34), trayLiquids[i] && trayLiquidMat(trayLiquids[i]));
+        liquid.rotation.x = -Math.PI / 2;
+        liquid.position.set(W/2 - 0.4, 0.985, zp);
+        scene.add(liquid);
+      }
+
+      // enlarger near the back-left corner — vertical column on a base,
+      // with a head box near the top and a baseboard.
+      const enlGroup = new THREE.Group();
+      enlGroup.position.set(-W/2 + 1.0, 0, D/2 - 1.3);
+      const baseMat = new THREE.MeshStandardMaterial({ color: 0x141414, roughness: 0.8, metalness: 0.3 });
+      const enlBase = new THREE.Mesh(new THREE.BoxGeometry(0.8, 0.04, 0.6), baseMat);
+      enlBase.position.set(0, 0.85, 0);
+      enlGroup.add(enlBase);
+      const enlBoard = new THREE.Mesh(new THREE.BoxGeometry(0.7, 0.01, 0.5), new THREE.MeshStandardMaterial({ color: 0xe8d4a0, roughness: 0.95 }));
+      enlBoard.position.set(0, 0.875, 0);
+      enlGroup.add(enlBoard);
+      const enlCol = new THREE.Mesh(new THREE.BoxGeometry(0.08, 1.7, 0.08), baseMat);
+      enlCol.position.set(-0.25, 1.75, -0.2);
+      enlGroup.add(enlCol);
+      const enlHead = new THREE.Mesh(new THREE.BoxGeometry(0.4, 0.35, 0.4), baseMat);
+      enlHead.position.set(0.0, 2.3, -0.2);
+      enlGroup.add(enlHead);
+      // little red glow under the head — the lamphouse
+      const headGlow = new THREE.Mesh(
+        new THREE.SphereGeometry(0.06, 10, 8),
+        new THREE.MeshBasicMaterial({ color: 0xff4020 })
+      );
+      headGlow.position.set(0, 2.12, -0.2);
+      enlGroup.add(headGlow);
+      const headLight = new THREE.PointLight(0xff3010, 0.6, 1.5, 2.0);
+      headLight.position.copy(headGlow.position);
+      enlGroup.add(headLight);
+      scene.add(enlGroup);
+
+      // drying line spanning across the room near the back — cord with
+      // a handful of "prints" (small rectangles) clipped to it.
+      const cordMat = new THREE.MeshStandardMaterial({ color: 0x444038, roughness: 1.0 });
+      const cord = new THREE.Mesh(new THREE.CylinderGeometry(0.01, 0.01, W - 0.8, 6), cordMat);
+      cord.rotation.z = Math.PI / 2;
+      cord.position.set(0, H - 1.1, D/2 - 1.6);
+      scene.add(cord);
+      const printMat = new THREE.MeshStandardMaterial({ color: 0xe6dcc8, roughness: 0.9 });
+      const printDarkMat = new THREE.MeshStandardMaterial({ color: 0x202020, roughness: 0.9 });
+      const prints = 6;
+      for (let i = 0; i < prints; i++) {
+        const t = (i + 1) / (prints + 1);
+        const x = (t - 0.5) * (W - 1);
+        const isDark = (i % 2) === 1;
+        const print = new THREE.Mesh(
+          new THREE.PlaneGeometry(0.32, 0.42),
+          isDark ? printDarkMat : printMat
+        );
+        print.position.set(x, H - 1.35, D/2 - 1.6);
+        print.rotation.y = THREE.MathUtils.degToRad((Math.random() - 0.5) * 8);
+        scene.add(print);
+        // clip suggestion: a tiny dark square at the top
+        const clip = new THREE.Mesh(
+          new THREE.BoxGeometry(0.06, 0.06, 0.02),
+          baseMat
+        );
+        clip.position.set(x, H - 1.14, D/2 - 1.6);
+        scene.add(clip);
+      }
+
+      // backlit etched-glass whiteboard on the front wall
+      const wb = makePlaceholderWhiteboard({
+        width: 3.0, height: 1.8,
+        color: 0xb8c8cc, emissive: 0x607880, frameColor: 0x141414
+      });
+      wb.position.set(0, 1.7, -D/2 + 0.04);
+      wb.userData.boardKind = 'etched-glass';
+      scene.add(wb);
+
+      // back door
+      const backDoor = buildBackDoor(D, shared.doorWood);
+      scene.add(backDoor);
+
+      return {
+        scene, width: W, depth: D, height: H,
+        backDoor, whiteboard: wb,
+        entryYaw: 0,  // camera enters looking -Z (toward the whiteboard)
+        doors: [backDoor]
+      };
+    }
+    ROOM_BUILDERS['photography-darkroom'] = buildPhotographyDarkroom;
+
+    // ----------------------------------------------------------------
+    // FURNISHED: greenhouse
+    //   claude-dev-framework -> glass walls, white steel frame,
+    //   terracotta + slate floor, grow lights + filtered daylight,
+    //   potting bench with a chalkboard easel.
+    // ----------------------------------------------------------------
+    function buildGreenhouse(project, roomTypeId, shared) {
+      // slate floor — cool gray with a hint of pattern
+      const slate = plasterTexture({ base: '#5a605c', noise: 18 });
+      slate.repeat.set(3, 3);
+      const floorMat = new THREE.MeshStandardMaterial({
+        map: slate, color: 0x808680, roughness: 0.9
+      });
+      // bright white-painted plaster walls behind a steel frame
+      const wallPlaster = plasterTexture({ base: '#e8eee6', noise: 8 });
+      wallPlaster.repeat.set(2, 1.2);
+      const wallMat = new THREE.MeshStandardMaterial({
+        map: wallPlaster, color: 0xc8d0c4, roughness: 0.85,
+        emissive: 0x404844, emissiveIntensity: 0.3
+      });
+      // emissive ceiling so it reads as a glass roof letting daylight in
+      const ceilingMat = new THREE.MeshStandardMaterial({
+        color: 0xeef4ee, roughness: 0.5,
+        emissive: 0xa8c8d4, emissiveIntensity: 0.85
+      });
+
+      const shell = makeRoomShell({
+        width: 7.0, depth: 6.0, height: 4.4,
+        floorMaterial: floorMat,
+        ceilingMaterial: ceilingMat,
+        wallFront: wallMat, wallBack: wallMat,
+        wallLeft: wallMat, wallRight: wallMat,
+        fogColor: 0xd8e4d8, fogNear: 6, fogFar: 22
+      });
+      const scene = shell.scene;
+      const W = shell.width, D = shell.depth, H = shell.height;
+
+      // strong cool-from-above hemisphere — the daylight
+      const hemi = new THREE.HemisphereLight(0xddeeff, 0x6a5040, 1.1);
+      scene.add(hemi);
+      // a key sun-direction-ish light from the front-top
+      const sun = new THREE.DirectionalLight(0xfff0d0, 1.4);
+      sun.position.set(2, 6, 1);
+      scene.add(sun);
+      scene.add(new THREE.AmbientLight(0xffffff, 0.45));
+
+      // two grow lights mounted on the ceiling — pink-magenta tint
+      const growLightHue = 0xff70b8;
+      for (const x of [-W/4, W/4]) {
+        const housing = new THREE.Mesh(
+          new THREE.BoxGeometry(1.6, 0.08, 0.4),
+          new THREE.MeshStandardMaterial({ color: 0xeeeeee, roughness: 0.6 })
+        );
+        housing.position.set(x, H - 0.15, 0);
+        scene.add(housing);
+        // glowing strip beneath
+        const strip = new THREE.Mesh(
+          new THREE.PlaneGeometry(1.5, 0.3),
+          new THREE.MeshBasicMaterial({ color: growLightHue })
+        );
+        strip.rotation.x = Math.PI / 2;
+        strip.position.set(x, H - 0.21, 0);
+        scene.add(strip);
+        const gl = new THREE.PointLight(growLightHue, 0.7, 6, 1.8);
+        gl.position.set(x, H - 0.4, 0);
+        scene.add(gl);
+      }
+
+      // white steel structural frame — a few vertical posts + cross-rails
+      const steel = new THREE.MeshStandardMaterial({
+        color: 0xf0f0ec, roughness: 0.4, metalness: 0.3
+      });
+      const postGeo = new THREE.BoxGeometry(0.08, H, 0.08);
+      for (const [x, z] of [[-W/2 + 0.05, -D/2 + 0.05], [W/2 - 0.05, -D/2 + 0.05],
+                            [-W/2 + 0.05, D/2 - 0.05],  [W/2 - 0.05, D/2 - 0.05]]) {
+        const post = new THREE.Mesh(postGeo, steel);
+        post.position.set(x, H/2, z);
+        scene.add(post);
+      }
+      // upper horizontal rails along the long walls
+      const railGeo = new THREE.BoxGeometry(W, 0.06, 0.06);
+      for (const z of [-D/2 + 0.05, D/2 - 0.05]) {
+        const rail = new THREE.Mesh(railGeo, steel);
+        rail.position.set(0, H - 0.4, z);
+        scene.add(rail);
+      }
+      // mid-height rail along the side walls (suggests glass framing)
+      const railSideGeo = new THREE.BoxGeometry(0.06, 0.06, D);
+      for (const x of [-W/2 + 0.05, W/2 - 0.05]) {
+        const r1 = new THREE.Mesh(railSideGeo, steel);
+        r1.position.set(x, H - 0.4, 0);
+        scene.add(r1);
+        const r2 = new THREE.Mesh(railSideGeo, steel);
+        r2.position.set(x, 1.6, 0);
+        scene.add(r2);
+      }
+
+      // potting bench against the right wall — heavy wood top + steel legs
+      const benchWood = woodTexture({ base: '#6a4222', dark: '#2a1408', stripes: 5 });
+      benchWood.repeat.set(1, 1);
+      const benchTopMat = new THREE.MeshStandardMaterial({
+        map: benchWood, color: 0x8a5a30, roughness: 0.85
+      });
+      const benchTop = new THREE.Mesh(new THREE.BoxGeometry(2.6, 0.08, 0.7), benchTopMat);
+      benchTop.position.set(W/2 - 0.55, 0.9, 0);
+      benchTop.rotation.y = -Math.PI / 2;
+      scene.add(benchTop);
+      const benchLeg = new THREE.BoxGeometry(0.06, 0.86, 0.06);
+      for (const zp of [-1.1, 1.1]) {
+        for (const dx of [-0.3, 0.3]) {
+          const leg = new THREE.Mesh(benchLeg, steel);
+          leg.position.set(W/2 - 0.55 + dx, 0.43, zp);
+          scene.add(leg);
+        }
+      }
+      // a lower shelf with terracotta pots
+      const shelf = benchTop.clone();
+      shelf.position.y = 0.35;
+      scene.add(shelf);
+
+      // terracotta pots with plants (cones for foliage + cylinders for pots)
+      const terracotta = new THREE.MeshStandardMaterial({
+        color: 0xc46a3a, roughness: 0.92, metalness: 0.0
+      });
+      const foliage = new THREE.MeshStandardMaterial({
+        color: 0x4a8a3a, roughness: 0.85, metalness: 0.0,
+        emissive: 0x102a10, emissiveIntensity: 0.15
+      });
+      const foliageDark = new THREE.MeshStandardMaterial({
+        color: 0x2c6a26, roughness: 0.9, metalness: 0.0
+      });
+      function placePot(x, y, z, kind = 'leafy') {
+        const pot = new THREE.Mesh(new THREE.CylinderGeometry(0.16, 0.12, 0.22, 16), terracotta);
+        pot.position.set(x, y + 0.11, z);
+        scene.add(pot);
+        if (kind === 'leafy') {
+          const leaves = new THREE.Mesh(new THREE.SphereGeometry(0.22, 14, 10), foliage);
+          leaves.position.set(x, y + 0.34, z);
+          scene.add(leaves);
+        } else if (kind === 'tall') {
+          for (let i = 0; i < 3; i++) {
+            const blade = new THREE.Mesh(
+              new THREE.ConeGeometry(0.05, 0.5 + Math.random() * 0.25, 6),
+              foliageDark
+            );
+            blade.position.set(x + (Math.random() - 0.5) * 0.1, y + 0.5, z + (Math.random() - 0.5) * 0.1);
+            blade.rotation.z = (Math.random() - 0.5) * 0.3;
+            scene.add(blade);
+          }
+        } else if (kind === 'small') {
+          const leaves = new THREE.Mesh(new THREE.SphereGeometry(0.14, 12, 8), foliage);
+          leaves.position.set(x, y + 0.26, z);
+          scene.add(leaves);
+        }
+      }
+      // pots on the upper bench
+      placePot(W/2 - 0.55,           0.98, -0.8,  'leafy');
+      placePot(W/2 - 0.55 + 0.25,    0.98,  0.0,  'tall');
+      placePot(W/2 - 0.55,           0.98,  0.8,  'leafy');
+      placePot(W/2 - 0.55 - 0.2,     0.98, -0.2,  'small');
+      // pots on the lower shelf
+      placePot(W/2 - 0.55,           0.43, -0.7,  'small');
+      placePot(W/2 - 0.55,           0.43,  0.7,  'leafy');
+
+      // a freestanding planter on the left side of the room
+      const bigPot = new THREE.Mesh(new THREE.CylinderGeometry(0.42, 0.32, 0.65, 20), terracotta);
+      bigPot.position.set(-W/2 + 0.9, 0.33, -D/2 + 1.0);
+      scene.add(bigPot);
+      const bigPlant = new THREE.Mesh(new THREE.SphereGeometry(0.55, 18, 12), foliage);
+      bigPlant.position.set(-W/2 + 0.9, 1.0, -D/2 + 1.0);
+      scene.add(bigPlant);
+
+      // chalkboard easel near the potting bench — placed slightly
+      // forward of the front wall and angled, but the actual
+      // whiteboard plane on the FRONT wall carries the project data
+      // (so the camera's auto-aim hits it).
+      const easelWood = new THREE.MeshStandardMaterial({
+        color: 0x3a2410, roughness: 0.9
+      });
+      const tripod = new THREE.Group();
+      const legGeo2 = new THREE.BoxGeometry(0.04, 1.7, 0.04);
+      for (const ang of [-0.25, 0.25, 0]) {
+        const leg = new THREE.Mesh(legGeo2, easelWood);
+        leg.position.set(Math.sin(ang) * 0.5, 0.85, Math.cos(ang) * (ang === 0 ? -0.3 : 0.3));
+        leg.rotation.z = ang;
+        if (ang === 0) leg.rotation.x = -0.2;
+        tripod.add(leg);
+      }
+      tripod.position.set(-1.6, 0, -D/2 + 1.4);
+      scene.add(tripod);
+
+      // The whiteboard itself: chalkboard styling, but on the front
+      // wall so the entering camera sees it.
+      const wb = makePlaceholderWhiteboard({
+        width: 2.8, height: 1.7,
+        color: 0x1a2418, emissive: 0x101a10, frameColor: 0x3a2410
+      });
+      wb.position.set(0, 1.7, -D/2 + 0.04);
+      wb.userData.boardKind = 'chalkboard';
+      scene.add(wb);
+
+      // back door
+      const backDoor = buildBackDoor(D, shared.doorWood);
+      scene.add(backDoor);
+
+      return {
+        scene, width: W, depth: D, height: H,
+        backDoor, whiteboard: wb,
+        entryYaw: 0,
+        doors: [backDoor]
+      };
+    }
+    ROOM_BUILDERS['greenhouse'] = buildGreenhouse;
+
+    // ----------------------------------------------------------------
+    // FURNISHED: blacksmith-forge
+    //   alden-stack -> stone walls, blackened iron, leather, coal forge
+    //   with orange glow dominating the lighting; anvil, water trough,
+    //   hammered iron leaning on a wall; hand-forged frame whiteboard.
+    // ----------------------------------------------------------------
+    function buildBlacksmithForge(project, roomTypeId, shared) {
+      // stone wall texture — large irregular stones via plaster-with-noise
+      const stone = plasterTexture({ base: '#4a4540', noise: 30 });
+      stone.repeat.set(2.5, 1.5);
+      const stoneMat = new THREE.MeshStandardMaterial({
+        map: stone, color: 0x686058, roughness: 0.95
+      });
+      // floor: dark slate-ish with subtle pattern
+      const floorStone = plasterTexture({ base: '#33302c', noise: 22 });
+      floorStone.repeat.set(3, 3);
+      const floorMat = new THREE.MeshStandardMaterial({
+        map: floorStone, color: 0x504a44, roughness: 0.95
+      });
+      // ceiling: dark wooden beams over plaster
+      const ceilingMat = new THREE.MeshStandardMaterial({
+        color: 0x1a1410, roughness: 1.0
+      });
+
+      const shell = makeRoomShell({
+        width: 7.0, depth: 6.5, height: 4.0,
+        floorMaterial: floorMat, ceilingMaterial: ceilingMat,
+        wallFront: stoneMat, wallBack: stoneMat,
+        wallLeft: stoneMat, wallRight: stoneMat,
+        fogColor: 0x1a0d05, fogNear: 4, fogFar: 18
+      });
+      const scene = shell.scene;
+      const W = shell.width, D = shell.depth, H = shell.height;
+
+      // ceiling beams — three exposed timbers spanning the room
+      const beamMat = new THREE.MeshStandardMaterial({ color: 0x261610, roughness: 1.0 });
+      for (const x of [-W/3, 0, W/3]) {
+        const beam = new THREE.Mesh(new THREE.BoxGeometry(0.32, 0.32, D), beamMat);
+        beam.position.set(x, H - 0.18, 0);
+        scene.add(beam);
+      }
+
+      // Lighting: forge dominates. Very low ambient red-orange.
+      scene.add(new THREE.AmbientLight(0x2a1408, 0.45));
+      // a weak cool "open door" daylight slicing in from -X
+      const door = new THREE.DirectionalLight(0xfff0d4, 0.7);
+      door.position.set(-3, 4, 2);
+      scene.add(door);
+
+      // ----- coal forge -----
+      // a stout brick box with a glowing orange center
+      const forgeGroup = new THREE.Group();
+      forgeGroup.position.set(-1.4, 0, 0.6);
+      const brickTex = brickTexture({
+        size: 256, brickW: 60, brickH: 30,
+        mortar: '#2a1d18', baseR: 80, baseG: 50, baseB: 42, jitter: 24
+      });
+      brickTex.repeat.set(2, 1);
+      const forgeBrick = new THREE.MeshStandardMaterial({
+        map: brickTex, color: 0x6a4030, roughness: 1.0
+      });
+      const forgeBody = new THREE.Mesh(new THREE.BoxGeometry(1.7, 0.85, 1.2), forgeBrick);
+      forgeBody.position.set(0, 0.42, 0);
+      forgeGroup.add(forgeBody);
+      // hearth (sunken top with coals)
+      const hearth = new THREE.Mesh(
+        new THREE.BoxGeometry(1.3, 0.18, 0.85),
+        new THREE.MeshStandardMaterial({ color: 0x080604, roughness: 1.0 })
+      );
+      hearth.position.set(0, 0.85, 0);
+      forgeGroup.add(hearth);
+      // glowing coals — emissive plane just above hearth
+      const coalsMat = new THREE.MeshBasicMaterial({ color: 0xff5010 });
+      const coals = new THREE.Mesh(new THREE.PlaneGeometry(1.15, 0.7), coalsMat);
+      coals.rotation.x = -Math.PI / 2;
+      coals.position.set(0, 0.92, 0);
+      forgeGroup.add(coals);
+      // a couple of darker chunks for texture
+      for (let i = 0; i < 8; i++) {
+        const chunk = new THREE.Mesh(
+          new THREE.BoxGeometry(0.12 + Math.random()*0.1, 0.06, 0.1 + Math.random()*0.1),
+          new THREE.MeshStandardMaterial({ color: 0x1a0c06, roughness: 1.0, emissive: 0x4a1a06, emissiveIntensity: 0.5 })
+        );
+        chunk.position.set((Math.random() - 0.5) * 0.9, 0.92, (Math.random() - 0.5) * 0.55);
+        chunk.rotation.y = Math.random() * Math.PI;
+        forgeGroup.add(chunk);
+      }
+      // chimney hood above
+      const hoodMat = new THREE.MeshStandardMaterial({ color: 0x141008, roughness: 0.95, metalness: 0.4 });
+      const hood = new THREE.Mesh(new THREE.ConeGeometry(0.95, 1.0, 4), hoodMat);
+      hood.position.set(0, 1.65, 0);
+      hood.rotation.y = Math.PI / 4;
+      forgeGroup.add(hood);
+      const flue = new THREE.Mesh(new THREE.CylinderGeometry(0.22, 0.22, 1.7, 12), hoodMat);
+      flue.position.set(0, 2.95, 0);
+      forgeGroup.add(flue);
+      scene.add(forgeGroup);
+
+      // the dominant orange light source — sits above the coals,
+      // pointing down. Very strong, short range so it pools.
+      const forgeLight = new THREE.PointLight(0xff7028, 4.5, 9, 1.7);
+      forgeLight.position.set(forgeGroup.position.x, 1.1, forgeGroup.position.z);
+      scene.add(forgeLight);
+      // a second softer light to push warmth across the room
+      const forgeFill = new THREE.PointLight(0xff4a18, 1.2, 14, 1.8);
+      forgeFill.position.set(forgeGroup.position.x, 2.2, forgeGroup.position.z);
+      scene.add(forgeFill);
+
+      // ----- anvil on a stump -----
+      const stumpMat = new THREE.MeshStandardMaterial({
+        color: 0x3a2210, roughness: 0.95
+      });
+      const stump = new THREE.Mesh(new THREE.CylinderGeometry(0.32, 0.36, 0.72, 16), stumpMat);
+      stump.position.set(0.6, 0.36, 1.0);
+      scene.add(stump);
+      const ironMat = new THREE.MeshStandardMaterial({
+        color: 0x1a1814, roughness: 0.55, metalness: 0.7
+      });
+      // anvil body (trapezoid approximated by a couple of boxes)
+      const anvilBase = new THREE.Mesh(new THREE.BoxGeometry(0.55, 0.10, 0.22), ironMat);
+      anvilBase.position.set(0.6, 0.78, 1.0);
+      scene.add(anvilBase);
+      const anvilTop = new THREE.Mesh(new THREE.BoxGeometry(0.75, 0.10, 0.22), ironMat);
+      anvilTop.position.set(0.6, 0.88, 1.0);
+      scene.add(anvilTop);
+      // horn (cone) at one end
+      const anvilHorn = new THREE.Mesh(new THREE.ConeGeometry(0.11, 0.30, 12), ironMat);
+      anvilHorn.position.set(0.6 + 0.52, 0.88, 1.0);
+      anvilHorn.rotation.z = -Math.PI / 2;
+      scene.add(anvilHorn);
+
+      // ----- water trough -----
+      const woodTrough = new THREE.MeshStandardMaterial({
+        color: 0x4a2a16, roughness: 0.95
+      });
+      const trough = new THREE.Mesh(new THREE.BoxGeometry(1.0, 0.42, 0.6), woodTrough);
+      trough.position.set(1.6, 0.21, -0.4);
+      scene.add(trough);
+      // water surface
+      const water = new THREE.Mesh(
+        new THREE.PlaneGeometry(0.92, 0.52),
+        new THREE.MeshStandardMaterial({
+          color: 0x1a2a30, roughness: 0.2, metalness: 0.1,
+          emissive: 0x4a2010, emissiveIntensity: 0.25  // catches forge glow
+        })
+      );
+      water.rotation.x = -Math.PI / 2;
+      water.position.set(1.6, 0.40, -0.4);
+      scene.add(water);
+
+      // ----- hammered iron pieces hanging on the right wall -----
+      const toolMat = new THREE.MeshStandardMaterial({
+        color: 0x1c1814, roughness: 0.55, metalness: 0.65
+      });
+      const tongs = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.5, 0.02), toolMat);
+      tongs.position.set(W/2 - 0.08, 1.9, -1.2);
+      tongs.rotation.z = Math.PI / 12;
+      scene.add(tongs);
+      const hammer1 = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.45, 0.02), toolMat);
+      hammer1.position.set(W/2 - 0.08, 1.85, -0.7);
+      scene.add(hammer1);
+      const hammer1Head = new THREE.Mesh(new THREE.BoxGeometry(0.16, 0.08, 0.08), toolMat);
+      hammer1Head.position.set(W/2 - 0.12, 2.05, -0.7);
+      scene.add(hammer1Head);
+      const hammer2 = hammer1.clone();
+      hammer2.position.z = -0.3;
+      scene.add(hammer2);
+      const hammer2Head = hammer1Head.clone();
+      hammer2Head.position.z = -0.3;
+      hammer2Head.scale.set(0.7, 0.7, 1);
+      scene.add(hammer2Head);
+      // a pegboard backing strip
+      const peg = new THREE.Mesh(
+        new THREE.BoxGeometry(0.04, 0.04, 2.0),
+        new THREE.MeshStandardMaterial({ color: 0x261610, roughness: 1.0 })
+      );
+      peg.position.set(W/2 - 0.10, 2.2, -0.7);
+      scene.add(peg);
+
+      // ----- whiteboard with hand-forged iron frame on the front wall -----
+      // The board itself is a slightly-warm slate; the frame is built
+      // from box bars with a slight emissive iron tone.
+      const wb = makePlaceholderWhiteboard({
+        width: 2.8, height: 1.7,
+        color: 0x2a2422, emissive: 0x180c08, frameColor: 0x141210
+      });
+      wb.position.set(0, 1.8, -D/2 + 0.04);
+      // beef up the frame with chunky decorative iron straps
+      const strapMat = new THREE.MeshStandardMaterial({
+        color: 0x1c1814, roughness: 0.55, metalness: 0.7
+      });
+      const strap = new THREE.Mesh(new THREE.BoxGeometry(0.12, 1.85, 0.04), strapMat);
+      strap.position.set(-1.45, 0, 0.01);
+      wb.add(strap);
+      const strap2 = strap.clone();
+      strap2.position.x = 1.45;
+      wb.add(strap2);
+      // a couple of "rivets"
+      const rivetGeo = new THREE.SphereGeometry(0.04, 12, 8);
+      for (const sx of [-1.45, 1.45]) {
+        for (const sy of [-0.78, 0.78]) {
+          const r = new THREE.Mesh(rivetGeo, strapMat);
+          r.position.set(sx, sy, 0.025);
+          wb.add(r);
+        }
+      }
+      wb.userData.boardKind = 'iron-framed-slate';
+      scene.add(wb);
+
+      // back door
+      const backDoor = buildBackDoor(D, shared.doorWood);
+      scene.add(backDoor);
+
+      return {
+        scene, width: W, depth: D, height: H,
+        backDoor, whiteboard: wb,
+        entryYaw: 0,
+        doors: [backDoor]
+      };
+    }
+    ROOM_BUILDERS['blacksmith-forge'] = buildBlacksmithForge;
+
+    // ----------------------------------------------------------------
+    // Whiteboard data rendering. Each furnished room declares a
+    // boardKind (etched-glass / chalkboard / iron-framed-slate / ...);
+    // we render the project record to a 2048x1280 canvas styled to
+    // match the kind, then swap the board's material to an unlit
+    // MeshBasicMaterial mapped to that canvas. Unlit keeps the data
+    // readable regardless of the (sometimes very dim) room lighting,
+    // and the texture itself carries the visual styling.
+    // ----------------------------------------------------------------
+    const WB_THEMES = {
+      'etched-glass': {
+        bg: '#0c1418',
+        panel: '#cad8dc',
+        text: '#0a1418',
+        muted: '#3a5a68',
+        accent: '#1f6080',
+        warn: '#a83040',
+        titleFont:  '700 78px "Helvetica Neue", -apple-system, sans-serif',
+        subFont:    '500 40px "Helvetica Neue", -apple-system, sans-serif',
+        headingFont:'600 44px "Helvetica Neue", -apple-system, sans-serif',
+        bodyFont:   '400 32px "Helvetica Neue", -apple-system, sans-serif',
+        dateFont:   '700 30px "SF Mono", "Menlo", monospace',
+        showFrameLine: true
+      },
+      'chalkboard': {
+        bg: '#1a2418',
+        panel: null,             // no inner panel; chalk on a dark slate
+        text: '#f4ecc8',
+        muted: '#b8b08a',
+        accent: '#c8e0a8',
+        warn: '#f0b860',
+        titleFont:  '700 78px "Bradley Hand", "Marker Felt", "Comic Sans MS", cursive',
+        subFont:    '500 38px "Bradley Hand", "Marker Felt", cursive',
+        headingFont:'700 44px "Bradley Hand", "Marker Felt", cursive',
+        bodyFont:   '400 30px "Bradley Hand", "Marker Felt", cursive',
+        dateFont:   '700 28px "Bradley Hand", "Marker Felt", cursive',
+        showFrameLine: false
+      },
+      'iron-framed-slate': {
+        bg: '#161210',
+        panel: '#2c2620',
+        text: '#f0e2c4',
+        muted: '#a08868',
+        accent: '#e8a050',
+        warn: '#e85040',
+        titleFont:  '700 78px Georgia, "Times New Roman", serif',
+        subFont:    '400 38px Georgia, serif',
+        headingFont:'700 44px Georgia, serif',
+        bodyFont:   '400 30px Georgia, serif',
+        dateFont:   '700 28px Georgia, serif',
+        showFrameLine: true
+      },
+      'default': {
+        bg: '#1a1410',
+        panel: '#f0e6d0',
+        text: '#1a1410',
+        muted: '#6a5a44',
+        accent: '#a07a3a',
+        warn: '#c44c4c',
+        titleFont:  '700 78px -apple-system, "Segoe UI", sans-serif',
+        subFont:    '500 40px -apple-system, "Segoe UI", sans-serif',
+        headingFont:'600 44px -apple-system, "Segoe UI", sans-serif',
+        bodyFont:   '400 32px -apple-system, "Segoe UI", sans-serif',
+        dateFont:   '700 30px "SF Mono", monospace',
+        showFrameLine: true
+      }
+    };
+
+    // wrap text horizontally; returns the new y after drawing
+    function drawWrappedText(ctx, text, x, y, maxWidth, lineHeight) {
+      if (!text) return y;
+      const words = text.split(/\s+/);
+      let line = '';
+      for (const w of words) {
+        const trial = line ? line + ' ' + w : w;
+        if (ctx.measureText(trial).width > maxWidth && line) {
+          ctx.fillText(line, x, y);
+          y += lineHeight;
+          line = w;
+        } else {
+          line = trial;
+        }
+      }
+      if (line) { ctx.fillText(line, x, y); y += lineHeight; }
+      return y;
+    }
+
+    function renderWhiteboardCanvas(project, kind) {
+      const theme = WB_THEMES[kind] || WB_THEMES['default'];
+      const c = document.createElement('canvas');
+      c.width = 2048; c.height = 1280;
+      const ctx = c.getContext('2d');
+
+      // background
+      ctx.fillStyle = theme.bg;
+      ctx.fillRect(0, 0, c.width, c.height);
+      // inner panel (skipped for chalkboard so text reads on raw slate)
+      const pad = 90;
+      if (theme.panel) {
+        ctx.fillStyle = theme.panel;
+        ctx.fillRect(pad - 40, pad - 40, c.width - (pad - 40) * 2, c.height - (pad - 40) * 2);
+      }
+      if (theme.showFrameLine) {
+        ctx.strokeStyle = theme.accent;
+        ctx.lineWidth = 4;
+        ctx.strokeRect(pad - 20, pad - 20, c.width - (pad - 20) * 2, c.height - (pad - 20) * 2);
+      }
+
+      const left = pad + 30;
+      const right = c.width - pad - 30;
+      const maxW = right - left;
+      let y = pad + 90;
+
+      // title
+      ctx.fillStyle = theme.text;
+      ctx.font = theme.titleFont;
+      ctx.textBaseline = 'alphabetic';
+      ctx.fillText(project.name, left, y);
+      y += 30;
+
+      // tagline (one line; truncate if too long)
+      ctx.fillStyle = theme.muted;
+      ctx.font = theme.subFont;
+      const tagline = project.tagline || '';
+      let tag = tagline;
+      while (ctx.measureText(tag).width > maxW && tag.length > 4) tag = tag.slice(0, -2);
+      if (tag.length < tagline.length) tag = tag.slice(0, -3) + '...';
+      ctx.fillText(tag, left, y + 36);
+      y += 80;
+
+      // current state (wrapped, 2 lines max)
+      if (project.current_state) {
+        ctx.fillStyle = theme.text;
+        ctx.font = theme.bodyFont;
+        const lineH = 42;
+        // limit to 2 lines manually
+        const words = project.current_state.split(/\s+/);
+        let line = '';
+        let lines = [];
+        for (const w of words) {
+          const trial = line ? line + ' ' + w : w;
+          if (ctx.measureText(trial).width > maxW && line) {
+            lines.push(line); line = w;
+            if (lines.length === 2) break;
+          } else { line = trial; }
+        }
+        if (line && lines.length < 2) lines.push(line);
+        if (lines.length === 2 && project.current_state.split(/\s+/).length > lines.join(' ').split(/\s+/).length) {
+          // truncate second line with ellipsis
+          while (ctx.measureText(lines[1] + '...').width > maxW && lines[1].length > 4) lines[1] = lines[1].slice(0, -1);
+          lines[1] += '...';
+        }
+        for (const ln of lines) { ctx.fillText(ln, left, y); y += lineH; }
+        y += 10;
+      }
+
+      // divider
+      ctx.fillStyle = theme.accent;
+      ctx.fillRect(left, y, 320, 3);
+      y += 30;
+
+      const lineH = 40;
+      const itemGap = 16;
+
+      // ACTION ITEMS
+      if (Array.isArray(project.action_items) && project.action_items.length) {
+        ctx.fillStyle = theme.accent;
+        ctx.font = theme.headingFont;
+        ctx.fillText('Action items', left, y);
+        y += 56;
+        ctx.font = theme.bodyFont;
+        ctx.fillStyle = theme.text;
+        const items = project.action_items.slice(0, 5);
+        for (const item of items) {
+          // checkbox
+          ctx.strokeStyle = theme.accent;
+          ctx.lineWidth = 3;
+          ctx.strokeRect(left, y - 28, 28, 28);
+          // text (wrapped, max 2 lines)
+          const tx = left + 50, tw = maxW - 50;
+          const before = y;
+          const words = item.split(/\s+/);
+          let line = '', lines = [];
+          for (const w of words) {
+            const trial = line ? line + ' ' + w : w;
+            if (ctx.measureText(trial).width > tw && line) {
+              lines.push(line); line = w;
+              if (lines.length === 2) break;
+            } else { line = trial; }
+          }
+          if (line && lines.length < 2) lines.push(line);
+          if (lines.length === 2 && item.split(/\s+/).length > lines.join(' ').split(/\s+/).length) {
+            while (ctx.measureText(lines[1] + '...').width > tw && lines[1].length > 4) lines[1] = lines[1].slice(0, -1);
+            lines[1] += '...';
+          }
+          for (const ln of lines) { ctx.fillText(ln, tx, y); y += lineH; }
+          y += itemGap;
+          // cap total height — if we run past 880, bail
+          if (y > 880) break;
+        }
+        y += 10;
+      }
+
+      // OPEN ITEMS (warnings)
+      if (Array.isArray(project.open_items) && project.open_items.length && y < 1000) {
+        ctx.fillStyle = theme.warn;
+        ctx.font = theme.headingFont;
+        ctx.fillText('Open items', left, y);
+        y += 56;
+        ctx.font = theme.bodyFont;
+        const items = project.open_items.slice(0, 2);
+        for (const item of items) {
+          // warning triangle
+          ctx.fillStyle = theme.warn;
+          ctx.beginPath();
+          ctx.moveTo(left + 14, y - 30);
+          ctx.lineTo(left + 28, y);
+          ctx.lineTo(left, y);
+          ctx.closePath();
+          ctx.fill();
+          // exclamation
+          ctx.fillStyle = theme.bg;
+          ctx.font = '700 22px sans-serif';
+          ctx.fillText('!', left + 11, y - 6);
+          ctx.font = theme.bodyFont;
+          ctx.fillStyle = theme.text;
+          const tx = left + 50, tw = maxW - 50;
+          y = drawWrappedText(ctx, item, tx, y, tw, lineH);
+          y += itemGap;
+          if (y > 1100) break;
+        }
+        y += 10;
+      }
+
+      // RECENT ACTIVITY (always rendered if room — right column placement
+      // if there's still vertical budget; otherwise skip)
+      if (Array.isArray(project.action_log) && project.action_log.length) {
+        // place in a second column on the right half if the first
+        // column got tall, otherwise continue below.
+        const startCol2 = y > 800;
+        let cx = left, cy = y, cw = maxW;
+        if (startCol2) {
+          cx = left + maxW * 0.55;
+          cy = pad + 280;
+          cw = maxW * 0.45;
+        }
+        ctx.fillStyle = theme.accent;
+        ctx.font = theme.headingFont;
+        ctx.fillText('Recent activity', cx, cy);
+        cy += 56;
+        ctx.font = theme.bodyFont;
+        const entries = project.action_log.slice(0, 3);
+        for (const e of entries) {
+          ctx.fillStyle = theme.muted;
+          ctx.font = theme.dateFont;
+          ctx.fillText(e.date, cx, cy);
+          cy += 38;
+          ctx.fillStyle = theme.text;
+          ctx.font = theme.bodyFont;
+          cy = drawWrappedText(ctx, e.content, cx, cy, cw, lineH);
+          cy += itemGap;
+          if (cy > 1200) break;
+        }
+      }
+
+      // status badge bottom-right
+      const statusMeta = {
+        shipped: { label: 'Operational', color: '#5fc36a' },
+        active:  { label: 'In Build',    color: '#e3a23a' },
+        blocked: { label: 'Blocked',     color: '#c44c4c' },
+        scoped:  { label: 'Scoped',      color: '#7090c0' },
+        planned: { label: 'Planned',     color: '#7090c0' }
+      }[project.status] || { label: project.status || '', color: theme.muted };
+      ctx.fillStyle = statusMeta.color;
+      ctx.font = '700 32px -apple-system, "Segoe UI", sans-serif';
+      const label = statusMeta.label.toUpperCase();
+      const labelW = ctx.measureText(label).width;
+      ctx.fillRect(right - labelW - 40, c.height - pad - 26, labelW + 30, 50);
+      ctx.fillStyle = theme.bg;
+      ctx.fillText(label, right - labelW - 25, c.height - pad + 8);
+
+      return c;
+    }
+
+    function applyWhiteboardData(built, project) {
+      const wb = built.whiteboard;
+      if (!wb) return;
+      const kind = wb.userData.boardKind || 'default';
+      const canvas = renderWhiteboardCanvas(project, kind);
+      const tex = new THREE.CanvasTexture(canvas);
+      tex.colorSpace = THREE.SRGBColorSpace;
+      tex.anisotropy = 8;
+      // swap to an unlit material so the data is always readable
+      // (the rest of the room is correctly lit by its own lights,
+      // and the board's frame mesh already carries the surrounding
+      // material treatment).
+      const board = wb.userData.board;
+      if (board) {
+        board.material.dispose?.();
+        board.material = new THREE.MeshBasicMaterial({ map: tex });
+      }
+    }
+
+    function buildRoomForProject(project, shared) {
+      const roomTypeId = project.room_type || assignRoom(project.id);
+      const builder = ROOM_BUILDERS[roomTypeId] || STUB_ROOM_BUILDER;
+      const built = builder(project, roomTypeId, shared);
+      built.project = project;
+      built.roomTypeId = roomTypeId;
+      // populate the whiteboard with project data for furnished rooms
+      applyWhiteboardData(built, project);
+      return built;
+    }
+
+    // ----------------------------------------------------------------
+    // Animator — drives walk-through and reverse animations.
+    // State machine within WorkshopApp; the animator is just a tween
+    // helper that resolves a promise on completion.
+    //
+    // Walk-through timeline:
+    //   t=0..300ms       approach: camera moves from lobby-center
+    //                              toward door, looking at door
+    //   t=300..350ms     flash:    DOM #flash opacity 0->1, then scene swap
+    //   t=350..600ms     arrival:  flash 1->0, camera slides slightly
+    //                              forward into the room
+    //
+    // Reverse timeline is the mirror of the above.
+    // ----------------------------------------------------------------
+    function easeInOutCubic(t) {
+      return t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
+    }
+
+    class Animator {
+      constructor(app) {
+        this.app = app;
+        this.active = null; // { kind, startTime, resolve, ... }
+      }
+      get isActive() { return this.active !== null; }
+      walkIntoRoom(door, roomBuilt) {
+        return new Promise(resolve => {
+          this.active = {
+            kind: 'walk-in',
+            startTime: performance.now(),
+            duration: 600,
+            phases: [300, 50, 250],
+            door, roomBuilt,
+            // lobby start pose
+            fromPos: new THREE.Vector3(0, 1.65, 0),
+            // approach destination (just outside the door)
+            midPos: door.userData.entryPosition.clone(),
+            // door world position used as lookAt during approach
+            doorWorld: door.getWorldPosition(new THREE.Vector3()),
+            // room arrival pose
+            roomStartPos: new THREE.Vector3(0, 1.65, roomBuilt.depth / 2 - 0.4),
+            roomEndPos:   new THREE.Vector3(0, 1.65, roomBuilt.depth / 2 - 1.0),
+            roomLookAt:   new THREE.Vector3(0, 1.65, -roomBuilt.depth / 2 + 0.4),
+            resolve
+          };
+        });
+      }
+      walkOutToLobby(backDoor) {
+        return new Promise(resolve => {
+          this.active = {
+            kind: 'walk-out',
+            startTime: performance.now(),
+            duration: 600,
+            phases: [250, 50, 300],
+            backDoor,
+            // current camera state captured at animation start so the
+            // approach phase smoothly leaves from wherever the user was.
+            fromPos: this.app.camera.position.clone(),
+            // approach the back-door (back of the room)
+            midPos: backDoor.userData.entryPosition.clone(),
+            backWorld: backDoor.getWorldPosition(new THREE.Vector3()),
+            // lobby arrival pose — center of lobby, facing the door
+            // we just came out of in the lobby (filled in by app)
+            lobbyStartPos: new THREE.Vector3(0, 1.65, 0),
+            lobbyEndPos:   new THREE.Vector3(0, 1.65, 0),
+            lobbyLookAt:   null, // app supplies this
+            resolve
+          };
+        });
+      }
+      update() {
+        const a = this.active;
+        if (!a) return;
+        const t = performance.now() - a.startTime;
+        const [p1, p2, p3] = a.phases;
+        const flashEl = document.getElementById('flash');
+
+        if (a.kind === 'walk-in') {
+          if (t < p1) {
+            // approach phase
+            const k = easeInOutCubic(t / p1);
+            const pos = a.fromPos.clone().lerp(a.midPos, k);
+            this.app.camera.position.copy(pos);
+            this.app.camera.lookAt(a.doorWorld);
+            flashEl.style.opacity = '0';
+          } else if (t < p1 + p2) {
+            // flash phase: fade up, swap scene at midpoint
+            const phaseT = (t - p1) / p2;
+            flashEl.style.opacity = String(phaseT);
+            if (!a.swapped && phaseT >= 0.5) {
+              // swap to room scene + position camera at room start
+              this.app.swapToRoomScene(a.roomBuilt);
+              a.swapped = true;
+            }
+          } else if (t < p1 + p2 + p3) {
+            // arrival phase: fade down, slide forward into room
+            const phaseT = (t - p1 - p2) / p3;
+            flashEl.style.opacity = String(1 - phaseT);
+            const pos = a.roomStartPos.clone().lerp(a.roomEndPos, easeInOutCubic(phaseT));
+            this.app.camera.position.copy(pos);
+            this.app.camera.lookAt(a.roomLookAt);
+          } else {
+            flashEl.style.opacity = '0';
+            this.app.camera.position.copy(a.roomEndPos);
+            this.app.camera.lookAt(a.roomLookAt);
+            // Hand control back to the controller, aligned with the
+            // room's entry yaw.
+            this.app.controller.setHeading(a.roomBuilt.entryYaw || 0);
+            this.app.controller.enabled = true;
+            this.active = null;
+            a.resolve();
+          }
+        } else if (a.kind === 'walk-out') {
+          // p1 = approach to back door (250)
+          // p2 = flash (50)
+          // p3 = arrival in lobby (300)
+          if (t < p1) {
+            const k = easeInOutCubic(t / p1);
+            const pos = a.fromPos.clone().lerp(a.midPos, k);
+            this.app.camera.position.copy(pos);
+            this.app.camera.lookAt(a.backWorld);
+            flashEl.style.opacity = '0';
+          } else if (t < p1 + p2) {
+            const phaseT = (t - p1) / p2;
+            flashEl.style.opacity = String(phaseT);
+            if (!a.swapped && phaseT >= 0.5) {
+              this.app.swapToLobbyScene();
+              a.swapped = true;
+            }
+          } else if (t < p1 + p2 + p3) {
+            const phaseT = (t - p1 - p2) / p3;
+            flashEl.style.opacity = String(1 - phaseT);
+            const pos = a.lobbyStartPos.clone().lerp(a.lobbyEndPos, easeInOutCubic(phaseT));
+            this.app.camera.position.copy(pos);
+            if (a.lobbyLookAt) this.app.camera.lookAt(a.lobbyLookAt);
+          } else {
+            flashEl.style.opacity = '0';
+            this.app.camera.position.copy(a.lobbyEndPos);
+            // Restore controller heading to face the lobby door the
+            // user just exited (so spatial continuity is preserved).
+            if (a.lobbyLookAt) {
+              const dx = a.lobbyLookAt.x - a.lobbyEndPos.x;
+              const dz = a.lobbyLookAt.z - a.lobbyEndPos.z;
+              const yaw = Math.atan2(dx, -dz);
+              this.app.controller.setHeading(yaw);
+            }
+            this.app.controller.enabled = true;
+            this.active = null;
+            a.resolve();
+          }
+        }
+      }
+    }
+
+    // ----------------------------------------------------------------
+    // WorkshopApp — boots Three.js, builds the lobby, drives the loop,
+    // handles walk-through animations and back-to-lobby returns.
+    // ----------------------------------------------------------------
+    class WorkshopApp {
+      constructor(canvas, projectsData) {
+        this.canvas = canvas;
+        this.projectsData = projectsData;
+        this.renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
+        this.renderer.outputColorSpace = THREE.SRGBColorSpace;
+        this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
+        this.renderer.toneMappingExposure = 1.15;
+        this._resize();
+        window.addEventListener('resize', () => this._resize());
+
+        this.camera = new THREE.PerspectiveCamera(72, window.innerWidth / window.innerHeight, 0.05, 80);
+        this.camera.position.set(0, 1.65, 0);
+
+        this.controller = new CameraController(this.camera, canvas);
+        this.picker = new HoverPicker(this.camera, canvas);
+
+        this.shared = makeSharedTextures();
+
+        const built = buildLobby(this.projectsData);
+        this.lobbyScene = built.scene;
+        this.lobbyDoors = built.doors;
+        this.activeScene = this.lobbyScene;
+        this.picker.setTargets(this.lobbyDoors);
+
+        // State machine: 'lobby' | 'walking-in' | 'in-room' | 'walking-out'
+        this.mode = 'lobby';
+        // Built rooms are cached so re-entering doesn't rebuild.
+        this.roomCache = new Map();
+        this.currentRoom = null;
+        // Record of which lobby door the user took, so on return the
+        // controller's heading restores facing that door (spatial
+        // continuity per spec).
+        this.returnDoorWorld = null;
+
+        this.animator = new Animator(this);
+
+        // Initial heading: face the app cluster (centered on 0 deg).
+        this.controller.setHeading(THREE.MathUtils.degToRad(90));
+
+        // Track mousedown -> mouseup distance so we can distinguish a
+        // tap (small movement = door pick) from a drag (large movement
+        // = look-around). A pure 'click' event still fires after a
+        // small drag in most browsers, which would inadvertently
+        // teleport the user into a room while they were panning.
+        let downAt = null;
+        canvas.addEventListener('mousedown', (e) => {
+          if (e.button === 0) downAt = { x: e.clientX, y: e.clientY };
+        });
+        this._onClick = (e) => {
+          if (this.animator.isActive) return;
+          if (downAt) {
+            const dx = e.clientX - downAt.x, dy = e.clientY - downAt.y;
+            downAt = null;
+            if (dx * dx + dy * dy > 36) return; // moved > 6px: treat as drag
+          }
+          const hov = this.picker.hovered;
+          if (!hov) return;
+          if (hov.userData.isBack) {
+            this._returnToLobby();
+          } else {
+            this._enterDoor(hov);
+          }
+        };
+        canvas.addEventListener('click', this._onClick);
+
+        this._onKey = (e) => {
+          if (e.key === 'Escape' && this.mode === 'in-room' && !this.animator.isActive) {
+            this._returnToLobby();
+          }
+        };
+        window.addEventListener('keydown', this._onKey);
+
+        this.clock = new THREE.Clock();
+        this._loop = this._loop.bind(this);
+        requestAnimationFrame(this._loop);
+      }
+      _enterDoor(doorGroup) {
+        const project = doorGroup.userData.project;
+        const roomTypeId = project.room_type || assignRoom(project.id);
+        let built = this.roomCache.get(project.id);
+        if (!built) {
+          built = buildRoomForProject(project, this.shared);
+          this.roomCache.set(project.id, built);
+        }
+        this.currentRoom = built;
+        this.returnDoorWorld = doorGroup.getWorldPosition(new THREE.Vector3());
+
+        // Hand off control to the animator.
+        this.controller.enabled = false;
+        this.mode = 'walking-in';
+        this.picker.setTargets([]);
+
+        // Update overlay text.
+        document.getElementById('subtitle').textContent =
+          project.name + (ROOM_BUILDERS[roomTypeId] ? '' : ' (stub room)');
+        document.getElementById('hint').classList.add('hidden');
+        document.getElementById('back-hint').classList.remove('hidden');
+
+        this.animator.walkIntoRoom(doorGroup, built).then(() => {
+          this.mode = 'in-room';
+          this.picker.setTargets(built.doors);
+        });
+      }
+      _returnToLobby() {
+        if (!this.currentRoom) return;
+        this.controller.enabled = false;
+        this.mode = 'walking-out';
+        this.picker.setTargets([]);
+
+        const anim = this.animator.walkOutToLobby(this.currentRoom.backDoor);
+        // Supply lobby start/end + look-at so the camera arrives at
+        // the lobby center facing the door it came out of (symmetric
+        // to the walk-in: the room ends with a forward-slide, the
+        // lobby starts with a step-back from that door).
+        const a = this.animator.active;
+        if (a && this.returnDoorWorld) {
+          const ret = this.returnDoorWorld;
+          a.lobbyStartPos = new THREE.Vector3(ret.x * 0.55, 1.65, ret.z * 0.55);
+          a.lobbyEndPos   = new THREE.Vector3(0, 1.65, 0);
+          a.lobbyLookAt   = ret.clone();
+        }
+
+        document.getElementById('subtitle').textContent = 'Lobby';
+        document.getElementById('back-hint').classList.add('hidden');
+        document.getElementById('hint').classList.remove('hidden');
+        document.getElementById('hint').classList.remove('dim');
+        setTimeout(() => document.getElementById('hint').classList.add('dim'), 4500);
+
+        anim.then(() => {
+          this.mode = 'lobby';
+          this.currentRoom = null;
+          this.picker.setTargets(this.lobbyDoors);
+        });
+      }
+      swapToRoomScene(roomBuilt) {
+        this.activeScene = roomBuilt.scene;
+      }
+      swapToLobbyScene() {
+        this.activeScene = this.lobbyScene;
+      }
+      _resize() {
+        const w = window.innerWidth, h = window.innerHeight;
+        this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+        this.renderer.setSize(w, h, false);
+        if (this.camera) {
+          this.camera.aspect = w / h;
+          this.camera.updateProjectionMatrix();
+        }
+      }
+      _loop() {
+        const dt = Math.min(0.05, this.clock.getDelta());
+        if (this.animator.isActive) {
+          this.animator.update();
+        } else {
+          this.controller.update(dt);
+        }
+        this.picker.update();
+        this.renderer.render(this.activeScene, this.camera);
+        requestAnimationFrame(this._loop);
+      }
+    }
+
+    // ----------------------------------------------------------------
+    // Bootstrap.
+    // ----------------------------------------------------------------
+    (async () => {
+      const { data: projectsData, source } = await loadProjects();
+      console.log(`[the_workshop] projects loaded via ${source}, ${projectsData.projects.length} projects`);
+
+      const canvas = document.getElementById('view');
+      const app = new WorkshopApp(canvas, projectsData);
+      window.__workshop = app; // dev convenience
+
+      // hide the loading overlay
+      const loading = document.getElementById('loading');
+      loading.classList.add('hidden');
+      // dim the hint after a few seconds
+      setTimeout(() => document.getElementById('hint').classList.add('dim'), 6500);
+    })();
+  </script>
+</body>
+</html>
