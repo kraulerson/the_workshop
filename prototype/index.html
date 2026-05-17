@@ -171,6 +171,245 @@ Out of scope for v1 (deferred)
       pointer-events: none;
       transition: none; /* opacity driven directly from JS frame loop */
     }
+
+    /* ----------------------------------------------------------------
+       Whiteboard expand-on-click overlay.
+       Themed via CSS custom properties set per room (boardKind ->
+       palette). Crisp HTML text rather than the in-room CanvasTexture
+       so the data is actually legible at full screen.
+       ---------------------------------------------------------------- */
+    #wb-overlay {
+      position: fixed; inset: 0;
+      background: rgba(8, 6, 4, 0.78);
+      backdrop-filter: blur(4px);
+      -webkit-backdrop-filter: blur(4px);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity 220ms ease;
+      z-index: 100;
+    }
+    #wb-overlay.open {
+      opacity: 1;
+      pointer-events: auto;
+    }
+    #wb-panel {
+      --wb-bg: #f0e6d0;
+      --wb-text: #1a1410;
+      --wb-muted: #6a5a44;
+      --wb-accent: #a07a3a;
+      --wb-warn: #c44c4c;
+      --wb-frame: #2a1d10;
+      --wb-title-font: 700 36px -apple-system, "Segoe UI", Helvetica, sans-serif;
+      --wb-heading-font: 600 20px -apple-system, "Segoe UI", Helvetica, sans-serif;
+      --wb-body-font: 400 16px -apple-system, "Segoe UI", Helvetica, sans-serif;
+      --wb-mono-font: 600 14px "SF Mono", "Menlo", "Consolas", monospace;
+
+      width: min(900px, 92vw);
+      max-height: 86vh;
+      background: var(--wb-bg);
+      color: var(--wb-text);
+      font: var(--wb-body-font);
+      border: 6px solid var(--wb-frame);
+      border-radius: 6px;
+      box-shadow: 0 24px 60px rgba(0, 0, 0, 0.6);
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+      transform: scale(0.96);
+      transition: transform 220ms ease;
+    }
+    #wb-overlay.open #wb-panel { transform: scale(1); }
+
+    #wb-panel header {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 16px;
+      padding: 24px 28px 8px;
+      border-bottom: 1px solid var(--wb-accent);
+    }
+    #wb-panel header > div { flex: 1; min-width: 0; }
+    #wb-title { font: var(--wb-title-font); color: var(--wb-text); line-height: 1.15; }
+    #wb-tagline {
+      font-size: 16px;
+      color: var(--wb-muted);
+      margin-top: 6px;
+      font-style: italic;
+    }
+    #wb-badge {
+      flex-shrink: 0;
+      padding: 6px 12px;
+      border-radius: 4px;
+      font: var(--wb-mono-font);
+      letter-spacing: 0.5px;
+      text-transform: uppercase;
+      color: #fff;
+      background: var(--wb-accent);
+    }
+    #wb-close {
+      flex-shrink: 0;
+      background: transparent;
+      border: 1.5px solid var(--wb-frame);
+      color: var(--wb-text);
+      width: 32px; height: 32px;
+      border-radius: 4px;
+      font-size: 20px;
+      line-height: 1;
+      cursor: pointer;
+      padding: 0;
+    }
+    #wb-close:hover { background: var(--wb-frame); color: var(--wb-bg); }
+
+    #wb-body {
+      flex: 1;
+      overflow-y: auto;
+      padding: 20px 28px 28px;
+      scrollbar-color: var(--wb-accent) transparent;
+    }
+    #wb-body::-webkit-scrollbar { width: 10px; }
+    #wb-body::-webkit-scrollbar-thumb {
+      background: var(--wb-accent);
+      border-radius: 5px;
+    }
+
+    .wb-section {
+      margin-top: 22px;
+    }
+    .wb-section:first-child { margin-top: 0; }
+    .wb-section h3 {
+      font: var(--wb-heading-font);
+      color: var(--wb-accent);
+      margin: 0 0 10px;
+      letter-spacing: 0.4px;
+      text-transform: uppercase;
+      font-size: 13px;
+    }
+    .wb-section.wb-warn h3 { color: var(--wb-warn); }
+    .wb-section p, .wb-section li { line-height: 1.55; }
+    .wb-section ul { list-style: none; padding: 0; margin: 0; }
+    .wb-section li {
+      padding: 6px 0;
+      border-bottom: 1px dashed rgba(0, 0, 0, 0.10);
+    }
+    .wb-section li:last-child { border-bottom: 0; }
+
+    .wb-check {
+      display: flex; align-items: flex-start; gap: 10px;
+    }
+    .wb-check .wb-box {
+      width: 16px; height: 16px;
+      border: 2px solid var(--wb-accent);
+      border-radius: 3px;
+      flex-shrink: 0;
+      margin-top: 3px;
+    }
+    .wb-check.done .wb-box {
+      background: var(--wb-accent);
+      position: relative;
+    }
+    .wb-check.done .wb-box::after {
+      content: "\2713";
+      position: absolute;
+      inset: -2px 0 0 1px;
+      color: var(--wb-bg);
+      font-size: 14px;
+      font-weight: 700;
+    }
+    .wb-check.done .wb-text { color: var(--wb-muted); text-decoration: line-through; }
+
+    .wb-warn-item {
+      display: flex; gap: 10px; align-items: flex-start;
+    }
+    .wb-warn-glyph {
+      flex-shrink: 0;
+      width: 16px; height: 16px;
+      margin-top: 4px;
+      background: var(--wb-warn);
+      clip-path: polygon(50% 0, 100% 100%, 0 100%);
+    }
+
+    .wb-log-entry {
+      padding: 8px 0;
+      border-bottom: 1px dashed rgba(0, 0, 0, 0.10);
+    }
+    .wb-log-entry:last-child { border-bottom: 0; }
+    .wb-log-date {
+      font: var(--wb-mono-font);
+      color: var(--wb-muted);
+      margin-bottom: 2px;
+    }
+
+    .wb-meta {
+      display: grid;
+      grid-template-columns: max-content 1fr;
+      gap: 6px 16px;
+      font: var(--wb-mono-font);
+      color: var(--wb-muted);
+    }
+    .wb-meta dt { font-weight: 700; color: var(--wb-text); }
+    .wb-meta dd { margin: 0; word-break: break-all; }
+    #wb-body a { color: var(--wb-accent); text-decoration: underline; }
+    #wb-body a:hover { color: var(--wb-text); }
+
+    /* Per-room theme palettes. boardKind class on #wb-panel chooses. */
+    #wb-panel.theme-etched-glass {
+      --wb-bg: #d8e2e6; --wb-text: #0a1418; --wb-muted: #3a5a68;
+      --wb-accent: #1f6080; --wb-warn: #a83040; --wb-frame: #0c1418;
+      --wb-title-font: 700 36px "Helvetica Neue", -apple-system, sans-serif;
+      --wb-heading-font: 600 20px "Helvetica Neue", -apple-system, sans-serif;
+      --wb-body-font: 400 16px "Helvetica Neue", -apple-system, sans-serif;
+    }
+    #wb-panel.theme-chalkboard {
+      --wb-bg: #1a2418; --wb-text: #f4ecc8; --wb-muted: #b8b08a;
+      --wb-accent: #c8e0a8; --wb-warn: #f0b860; --wb-frame: #3a2410;
+      --wb-title-font: 700 38px "Bradley Hand", "Marker Felt", "Comic Sans MS", cursive;
+      --wb-heading-font: 700 22px "Bradley Hand", "Marker Felt", cursive;
+      --wb-body-font: 400 17px "Bradley Hand", "Marker Felt", cursive;
+    }
+    #wb-panel.theme-chalkboard .wb-section li { border-bottom-color: rgba(244,236,200,0.15); }
+    #wb-panel.theme-chalkboard .wb-log-entry { border-bottom-color: rgba(244,236,200,0.15); }
+    #wb-panel.theme-iron-framed-slate {
+      --wb-bg: #2c2620; --wb-text: #f0e2c4; --wb-muted: #a08868;
+      --wb-accent: #e8a050; --wb-warn: #e85040; --wb-frame: #141008;
+      --wb-title-font: 700 38px Georgia, "Times New Roman", serif;
+      --wb-heading-font: 700 22px Georgia, serif;
+      --wb-body-font: 400 16px Georgia, serif;
+    }
+    #wb-panel.theme-iron-framed-slate .wb-section li { border-bottom-color: rgba(240,226,196,0.12); }
+    #wb-panel.theme-iron-framed-slate .wb-log-entry { border-bottom-color: rgba(240,226,196,0.12); }
+    #wb-panel.theme-brass-plaque {
+      --wb-bg: #c8943a; --wb-text: #1a0e04; --wb-muted: #5a3c14;
+      --wb-accent: #7a5018; --wb-warn: #8a2010; --wb-frame: #241710;
+      --wb-title-font: 700 38px "Baskerville", "Garamond", Georgia, serif;
+      --wb-heading-font: 700 22px "Baskerville", Georgia, serif;
+      --wb-body-font: 400 16px "Baskerville", Georgia, serif;
+    }
+    #wb-panel.theme-steel-sheet {
+      --wb-bg: #c0c5c8; --wb-text: #0a0c0e; --wb-muted: #3a4248;
+      --wb-accent: #206080; --wb-warn: #b03020; --wb-frame: #1a1d20;
+      --wb-title-font: 700 32px "SF Mono", "Menlo", "Consolas", monospace;
+      --wb-heading-font: 700 16px "SF Mono", "Menlo", monospace;
+      --wb-body-font: 400 15px "SF Mono", "Menlo", monospace;
+    }
+    #wb-panel.theme-backlit-acrylic {
+      --wb-bg: #16191e; --wb-text: #f0d8a0; --wb-muted: #a07840;
+      --wb-accent: #ffb858; --wb-warn: #ff5040; --wb-frame: #080808;
+      --wb-title-font: 700 38px "Helvetica Neue", -apple-system, sans-serif;
+      --wb-heading-font: 600 20px "Helvetica Neue", -apple-system, sans-serif;
+      --wb-body-font: 400 16px "Helvetica Neue", -apple-system, sans-serif;
+    }
+    #wb-panel.theme-backlit-acrylic .wb-section li,
+    #wb-panel.theme-backlit-acrylic .wb-log-entry { border-bottom-color: rgba(240,216,160,0.12); }
+    #wb-panel.theme-tapestry {
+      --wb-bg: #e8d4a8; --wb-text: #3a1a14; --wb-muted: #7a4828;
+      --wb-accent: #a04030; --wb-warn: #601810; --wb-frame: #3a1a14;
+      --wb-title-font: 700 38px Georgia, serif;
+      --wb-heading-font: 700 22px Georgia, serif;
+      --wb-body-font: 400 16px Georgia, serif;
+    }
   </style>
 </head>
 <body>
@@ -181,10 +420,24 @@ Out of scope for v1 (deferred)
       <span id="subtitle">Lobby</span>
     </div>
     <div id="hint">Click and drag to look around &middot; click a door to enter</div>
-    <div id="back-hint" class="hidden">Click the back door or press <kbd>Esc</kbd> to return to the lobby</div>
+    <div id="back-hint" class="hidden">Click the whiteboard to read it &middot; click the back door or press <kbd>Esc</kbd> to return to the lobby</div>
   </div>
   <div id="loading">Building the workshop&hellip;</div>
   <div id="flash"></div>
+
+  <div id="wb-overlay" role="dialog" aria-modal="true" aria-labelledby="wb-title">
+    <div id="wb-panel">
+      <header>
+        <div>
+          <div id="wb-title"></div>
+          <div id="wb-tagline"></div>
+        </div>
+        <div id="wb-badge"></div>
+        <button id="wb-close" type="button" aria-label="Close">&times;</button>
+      </header>
+      <div id="wb-body"></div>
+    </div>
+  </div>
 
   <script type="application/json" id="projects-data">{
   "meta": {
@@ -4638,6 +4891,183 @@ Out of scope for v1 (deferred)
     }
 
     // ----------------------------------------------------------------
+    // WhiteboardOverlay — fullscreen DOM panel rendering a project's
+    // data in crisp HTML. The in-room CanvasTexture whiteboard reads
+    // well at room distance but is illegible up close; this overlay
+    // is the "step up to the board" UX.
+    //
+    // Theming follows the same boardKind taxonomy the canvas uses, so
+    // each room's overlay matches its in-room whiteboard palette.
+    // ----------------------------------------------------------------
+    function escapeHtml(s) {
+      if (s == null) return '';
+      return String(s)
+        .replace(/&/g, '&amp;').replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+    }
+
+    const STATUS_META = {
+      shipped: { label: 'Operational', color: '#5fc36a' },
+      active:  { label: 'In Build',    color: '#e3a23a' },
+      blocked: { label: 'Blocked',     color: '#c44c4c' },
+      scoped:  { label: 'Scoped',      color: '#7090c0' },
+      planned: { label: 'Planned',     color: '#7090c0' }
+    };
+
+    function renderWhiteboardOverlayBody(project) {
+      const parts = [];
+
+      if (project.current_state) {
+        parts.push(`
+          <div class="wb-section">
+            <h3>Current state</h3>
+            <p>${escapeHtml(project.current_state)}</p>
+          </div>`);
+      }
+
+      if (project.description) {
+        parts.push(`
+          <div class="wb-section">
+            <h3>About</h3>
+            <p>${escapeHtml(project.description)}</p>
+          </div>`);
+      }
+
+      const ai = Array.isArray(project.action_items) ? project.action_items : [];
+      if (ai.length) {
+        const items = ai.map(item => `
+          <li>
+            <div class="wb-check">
+              <div class="wb-box"></div>
+              <div class="wb-text">${escapeHtml(item)}</div>
+            </div>
+          </li>`).join('');
+        parts.push(`
+          <div class="wb-section">
+            <h3>Action items</h3>
+            <ul>${items}</ul>
+          </div>`);
+      }
+
+      const oi = Array.isArray(project.open_items) ? project.open_items : [];
+      if (oi.length) {
+        const items = oi.map(item => `
+          <li>
+            <div class="wb-warn-item">
+              <div class="wb-warn-glyph"></div>
+              <div>${escapeHtml(item)}</div>
+            </div>
+          </li>`).join('');
+        parts.push(`
+          <div class="wb-section wb-warn">
+            <h3>Open items / risks</h3>
+            <ul>${items}</ul>
+          </div>`);
+      }
+
+      const ms = Array.isArray(project.milestones) ? project.milestones : [];
+      if (ms.length) {
+        const items = ms.map(m => `
+          <li>
+            <div class="wb-check ${m.done ? 'done' : ''}">
+              <div class="wb-box"></div>
+              <div class="wb-text">${escapeHtml(m.label)}</div>
+            </div>
+          </li>`).join('');
+        parts.push(`
+          <div class="wb-section">
+            <h3>Milestones</h3>
+            <ul>${items}</ul>
+          </div>`);
+      }
+
+      const log = Array.isArray(project.action_log) ? project.action_log : [];
+      if (log.length) {
+        const entries = log.slice(0, 8).map(e => `
+          <div class="wb-log-entry">
+            <div class="wb-log-date">${escapeHtml(e.date || '')}</div>
+            <div>${escapeHtml(e.content || '')}</div>
+          </div>`).join('');
+        parts.push(`
+          <div class="wb-section">
+            <h3>Recent activity</h3>
+            ${entries}
+          </div>`);
+      }
+
+      const metaRows = [];
+      if (project.repo) metaRows.push([
+        'repo', project.repo_visibility === 'private'
+          ? `${escapeHtml(project.repo)} <span style="opacity:0.6">(private)</span>`
+          : `<a href="https://${escapeHtml(project.repo)}" target="_blank" rel="noopener">${escapeHtml(project.repo)}</a>`
+      ]);
+      if (Array.isArray(project.depends_on) && project.depends_on.length) {
+        metaRows.push(['depends on', project.depends_on.map(escapeHtml).join(', ')]);
+      }
+      if (Array.isArray(project.feeds_into) && project.feeds_into.length) {
+        metaRows.push(['feeds into', project.feeds_into.map(escapeHtml).join(', ')]);
+      }
+      if (project.metrics && typeof project.metrics === 'object') {
+        const m = Object.entries(project.metrics)
+          .map(([k, v]) => `${escapeHtml(k)}=${escapeHtml(String(v))}`)
+          .join('  ');
+        if (m) metaRows.push(['metrics', m]);
+      }
+      if (metaRows.length) {
+        const rows = metaRows.map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join('');
+        parts.push(`
+          <div class="wb-section">
+            <h3>Details</h3>
+            <dl class="wb-meta">${rows}</dl>
+          </div>`);
+      }
+
+      return parts.join('');
+    }
+
+    class WhiteboardOverlay {
+      constructor() {
+        this.root = document.getElementById('wb-overlay');
+        this.panel = document.getElementById('wb-panel');
+        this.titleEl = document.getElementById('wb-title');
+        this.taglineEl = document.getElementById('wb-tagline');
+        this.badgeEl = document.getElementById('wb-badge');
+        this.bodyEl = document.getElementById('wb-body');
+        this.closeBtn = document.getElementById('wb-close');
+        this.onClose = null;
+
+        this.closeBtn.addEventListener('click', () => this.close());
+        this.root.addEventListener('click', (e) => {
+          if (e.target === this.root) this.close();
+        });
+      }
+      get isOpen() { return this.root.classList.contains('open'); }
+      open(project, boardKind) {
+        this.titleEl.textContent = project.name || '(untitled)';
+        this.taglineEl.textContent = project.tagline || '';
+        const meta = STATUS_META[project.status] || { label: project.status || '', color: '#a07a3a' };
+        this.badgeEl.textContent = meta.label;
+        this.badgeEl.style.background = meta.color;
+
+        // pick theme class
+        for (const c of Array.from(this.panel.classList)) {
+          if (c.startsWith('theme-')) this.panel.classList.remove(c);
+        }
+        const themeName = boardKind || 'default';
+        this.panel.classList.add(`theme-${themeName}`);
+
+        this.bodyEl.innerHTML = renderWhiteboardOverlayBody(project);
+        this.bodyEl.scrollTop = 0;
+        this.root.classList.add('open');
+      }
+      close() {
+        if (!this.isOpen) return;
+        this.root.classList.remove('open');
+        if (this.onClose) this.onClose();
+      }
+    }
+
+    // ----------------------------------------------------------------
     // WorkshopApp — boots Three.js, builds the lobby, drives the loop,
     // handles walk-through animations and back-to-lobby returns.
     // ----------------------------------------------------------------
@@ -4677,6 +5107,8 @@ Out of scope for v1 (deferred)
         this.returnDoorWorld = null;
 
         this.animator = new Animator(this);
+        this.wbOverlay = new WhiteboardOverlay();
+        this.wbHovered = false; // whiteboard-mesh hover state, separate from door picker
 
         // Initial heading: face the app cluster (centered on 0 deg).
         this.controller.setHeading(THREE.MathUtils.degToRad(90));
@@ -4692,11 +5124,19 @@ Out of scope for v1 (deferred)
         });
         this._onClick = (e) => {
           if (this.animator.isActive) return;
+          if (this.wbOverlay.isOpen) return; // overlay handles its own close
           if (downAt) {
             const dx = e.clientX - downAt.x, dy = e.clientY - downAt.y;
             downAt = null;
             if (dx * dx + dy * dy > 36) return; // moved > 6px: treat as drag
           }
+          // 1. Whiteboard click takes priority over door picker (the
+          //    whiteboard is the main reason to look at the front wall).
+          if (this.mode === 'in-room' && this._raycastWhiteboard()) {
+            this._openWhiteboardOverlay();
+            return;
+          }
+          // 2. Door click via the existing hover picker
           const hov = this.picker.hovered;
           if (!hov) return;
           if (hov.userData.isBack) {
@@ -4708,8 +5148,15 @@ Out of scope for v1 (deferred)
         canvas.addEventListener('click', this._onClick);
 
         this._onKey = (e) => {
-          if (e.key === 'Escape' && this.mode === 'in-room' && !this.animator.isActive) {
-            this._returnToLobby();
+          if (e.key === 'Escape') {
+            // Esc priority: close overlay first; only then exit room.
+            if (this.wbOverlay.isOpen) {
+              this.wbOverlay.close();
+              return;
+            }
+            if (this.mode === 'in-room' && !this.animator.isActive) {
+              this._returnToLobby();
+            }
           }
         };
         window.addEventListener('keydown', this._onKey);
@@ -4782,6 +5229,40 @@ Out of scope for v1 (deferred)
       swapToLobbyScene() {
         this.activeScene = this.lobbyScene;
       }
+      _raycastWhiteboard() {
+        const room = this.currentRoom;
+        if (!room || !room.whiteboard?.userData?.board) return null;
+        const board = room.whiteboard.userData.board;
+        this.picker.raycaster.setFromCamera(this.picker.ndc, this.camera);
+        const hits = this.picker.raycaster.intersectObject(board, false);
+        return hits.length ? board : null;
+      }
+      _openWhiteboardOverlay() {
+        const room = this.currentRoom;
+        if (!room) return;
+        this.wbOverlay.open(room.project, room.whiteboard.userData.boardKind);
+      }
+      _updateWhiteboardHover() {
+        // Pointer cursor when hovering the in-room whiteboard. Only
+        // active in 'in-room' mode + when the door picker hasn't
+        // already claimed the cursor.
+        if (this.mode !== 'in-room' || this.animator.isActive || this.wbOverlay.isOpen) {
+          if (this.wbHovered) { this.wbHovered = false; }
+          return;
+        }
+        if (this.picker.hovered) {
+          this.wbHovered = false;
+          return;
+        }
+        const hit = this._raycastWhiteboard();
+        if (hit && !this.wbHovered) {
+          this.wbHovered = true;
+          this.canvas.style.cursor = 'pointer';
+        } else if (!hit && this.wbHovered) {
+          this.wbHovered = false;
+          this.canvas.style.cursor = 'default';
+        }
+      }
       _resize() {
         const w = window.innerWidth, h = window.innerHeight;
         this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
@@ -4799,6 +5280,7 @@ Out of scope for v1 (deferred)
           this.controller.update(dt);
         }
         this.picker.update();
+        this._updateWhiteboardHover();
         this.renderer.render(this.activeScene, this.camera);
         requestAnimationFrame(this._loop);
       }
