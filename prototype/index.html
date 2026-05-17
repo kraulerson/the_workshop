@@ -3255,6 +3255,178 @@ Out of scope for v1 (deferred)
     ROOM_BUILDERS['foundry'] = buildFoundry;
 
     // ----------------------------------------------------------------
+    // FURNISHED: glassblowing-studio
+    //   k-pdf -> firebrick walls, steel marver, slate floor, glory hole
+    //   furnace, glass rods, finished pieces. Heat-tempered glass
+    //   surface for the whiteboard (etched-glass theme).
+    // ----------------------------------------------------------------
+    function buildGlassblowingStudio(project, roomTypeId, shared) {
+      const slate = plasterTexture({ base: '#4a4640', noise: 18 });
+      slate.repeat.set(3, 3);
+      const floorMat = new THREE.MeshStandardMaterial({
+        map: slate, color: 0x5a564e, roughness: 0.85
+      });
+      const firebrick = brickTexture({
+        size: 512, brickW: 80, brickH: 28,
+        mortar: '#3a281c', baseR: 168, baseG: 110, baseB: 70, jitter: 22
+      });
+      firebrick.repeat.set(2.5, 1.4);
+      const wallMat = new THREE.MeshStandardMaterial({
+        map: firebrick, color: 0xb88860, roughness: 0.95
+      });
+      const ceilingMat = new THREE.MeshStandardMaterial({ color: 0x1a1410, roughness: 1.0 });
+
+      const shell = makeRoomShell({
+        width: 7.0, depth: 6.5, height: 3.8,
+        floorMaterial: floorMat, ceilingMaterial: ceilingMat,
+        wallFront: wallMat, wallBack: wallMat, wallLeft: wallMat, wallRight: wallMat,
+        fogColor: 0x281408, fogNear: 5, fogFar: 20
+      });
+      const scene = shell.scene;
+      const W = shell.width, D = shell.depth, H = shell.height;
+
+      // a low warm ambient + a touch of cool
+      scene.add(new THREE.AmbientLight(0x402818, 0.55));
+      scene.add(new THREE.HemisphereLight(0x6a5040, 0x1a0e06, 0.3));
+
+      // ------- glory hole furnace on the left side -------
+      // a brick block with a single brightly-glowing horizontal opening
+      const ghBody = new THREE.Mesh(
+        new THREE.BoxGeometry(1.4, 1.4, 1.4),
+        new THREE.MeshStandardMaterial({ map: firebrick.clone(), color: 0x8a6048, roughness: 0.95 })
+      );
+      ghBody.position.set(-W/2 + 1.0, 0.7, 0.0);
+      scene.add(ghBody);
+      // dark mouth surround
+      const ghMouth = new THREE.Mesh(
+        new THREE.BoxGeometry(0.7, 0.5, 0.05),
+        new THREE.MeshStandardMaterial({ color: 0x080604, roughness: 1.0 })
+      );
+      ghMouth.position.set(-W/2 + 1.0 + 0.71, 0.85, 0.0);
+      ghMouth.rotation.y = Math.PI / 2;
+      scene.add(ghMouth);
+      // the actual glow inside the mouth
+      const ghFire = new THREE.Mesh(
+        new THREE.PlaneGeometry(0.55, 0.35),
+        new THREE.MeshBasicMaterial({ color: 0xfff0a0 })
+      );
+      ghFire.position.set(-W/2 + 1.0 + 0.74, 0.85, 0.0);
+      ghFire.rotation.y = Math.PI / 2;
+      scene.add(ghFire);
+      // dominant orange light source pouring out
+      const ghLight = new THREE.SpotLight(0xff8030, 7.5, 10, Math.PI/3.5, 0.7, 1.4);
+      ghLight.position.set(-W/2 + 1.0 + 0.7, 0.85, 0.0);
+      ghLight.target.position.set(W/2, 0.5, 0.0);
+      scene.add(ghLight); scene.add(ghLight.target);
+      // a soft warm fill in the room
+      const ghFill = new THREE.PointLight(0xff6020, 1.6, 8, 1.7);
+      ghFill.position.set(-W/2 + 2.0, 1.4, 0);
+      scene.add(ghFill);
+      // tiny chimney up top
+      const ghStack = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.16, 0.16, 1.0, 14),
+        new THREE.MeshStandardMaterial({ color: 0x141008, roughness: 0.8, metalness: 0.4 })
+      );
+      ghStack.position.set(-W/2 + 1.0, 1.9, 0.0);
+      scene.add(ghStack);
+
+      // ------- marver table — heavy polished steel slab -------
+      const marverSteel = new THREE.MeshStandardMaterial({
+        color: 0x868a90, roughness: 0.18, metalness: 0.95
+      });
+      const marverFrame = new THREE.MeshStandardMaterial({
+        color: 0x202428, roughness: 0.7, metalness: 0.6
+      });
+      const marverTop = new THREE.Mesh(new THREE.BoxGeometry(1.8, 0.06, 0.9), marverSteel);
+      marverTop.position.set(0.6, 0.94, 0.4);
+      scene.add(marverTop);
+      // four legs
+      const legGeo = new THREE.BoxGeometry(0.08, 0.91, 0.08);
+      for (const [dx, dz] of [[-0.82, -0.4], [0.82, -0.4], [-0.82, 0.4], [0.82, 0.4]]) {
+        const leg = new THREE.Mesh(legGeo, marverFrame);
+        leg.position.set(0.6 + dx, 0.46, 0.4 + dz);
+        scene.add(leg);
+      }
+      // a partial glass blob in progress on the marver — orange emissive
+      const inProgress = new THREE.Mesh(
+        new THREE.SphereGeometry(0.16, 18, 12),
+        new THREE.MeshStandardMaterial({
+          color: 0xffa040, roughness: 0.2, metalness: 0.0,
+          emissive: 0xff7028, emissiveIntensity: 0.7
+        })
+      );
+      inProgress.position.set(0.6, 1.13, 0.4);
+      scene.add(inProgress);
+      // pipe sticking out of it
+      const blowPipe = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.03, 0.03, 1.3, 12),
+        marverFrame
+      );
+      blowPipe.position.set(0.0, 1.13, 0.4);
+      blowPipe.rotation.z = Math.PI / 2;
+      scene.add(blowPipe);
+
+      // ------- glass rods leaning against the right wall in a rack -------
+      const rackMat = new THREE.MeshStandardMaterial({ color: 0x2a1f18, roughness: 0.9 });
+      const rack = new THREE.Mesh(new THREE.BoxGeometry(0.18, 1.6, 0.1), rackMat);
+      rack.position.set(W/2 - 0.18, 0.8, -1.4);
+      scene.add(rack);
+      const glassColors = [0x4070c8, 0xc04060, 0x40a868, 0xb8a040, 0x9050c0, 0xc05030];
+      for (let i = 0; i < 8; i++) {
+        const c = glassColors[i % glassColors.length];
+        const rod = new THREE.Mesh(
+          new THREE.CylinderGeometry(0.02, 0.02, 1.6, 10),
+          new THREE.MeshStandardMaterial({
+            color: c, roughness: 0.2, metalness: 0.0,
+            emissive: c, emissiveIntensity: 0.18
+          })
+        );
+        rod.position.set(W/2 - 0.18 - 0.05 + (i % 2) * 0.03, 0.8, -1.4 + (i - 3.5) * 0.07);
+        rod.rotation.x = (Math.random() - 0.5) * 0.1;
+        scene.add(rod);
+      }
+
+      // ------- a finished vase on a display stand near the front -------
+      const standMat = new THREE.MeshStandardMaterial({ color: 0x141008, roughness: 0.9 });
+      const standCol = new THREE.Mesh(new THREE.CylinderGeometry(0.18, 0.22, 0.8, 16), standMat);
+      standCol.position.set(W/2 - 1.8, 0.4, 1.8);
+      scene.add(standCol);
+      const vase = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.16, 0.22, 0.45, 20),
+        new THREE.MeshStandardMaterial({
+          color: 0x4080c8, roughness: 0.15, metalness: 0.1,
+          emissive: 0x2050a0, emissiveIntensity: 0.4
+        })
+      );
+      vase.position.set(W/2 - 1.8, 1.025, 1.8);
+      scene.add(vase);
+      // accent light on the vase to catch its color
+      const vaseLight = new THREE.PointLight(0x80a0ff, 0.6, 2.5, 1.7);
+      vaseLight.position.set(W/2 - 1.8, 1.4, 1.8);
+      scene.add(vaseLight);
+
+      // ------- heat-tempered glass whiteboard on the front wall -------
+      const wb = makePlaceholderWhiteboard({
+        width: 2.8, height: 1.7,
+        color: 0xb8c8cc, emissive: 0x405860, frameColor: 0x101418
+      });
+      wb.position.set(0, 1.7, -D/2 + 0.04);
+      wb.userData.boardKind = 'etched-glass';
+      scene.add(wb);
+
+      const backDoor = buildBackDoor(D, shared.doorWood);
+      scene.add(backDoor);
+
+      return {
+        scene, width: W, depth: D, height: H,
+        backDoor, whiteboard: wb,
+        entryYaw: 0,
+        doors: [backDoor]
+      };
+    }
+    ROOM_BUILDERS['glassblowing-studio'] = buildGlassblowingStudio;
+
+    // ----------------------------------------------------------------
     // Whiteboard data rendering. Each furnished room declares a
     // boardKind (etched-glass / chalkboard / iron-framed-slate / ...);
     // we render the project record to a 2048x1280 canvas styled to
